@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environment - THIS IS THE KEY!
+venv/
+env/
+ENV/
+.venv
+
+# Database files (will be created on Railway)
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment files (use Railway dashboard for env vars)
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+
+# Images (not needed on server)
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Railway
+.railway/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
