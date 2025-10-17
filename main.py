@@ -1,6 +1,9 @@
 # main.py
 
 """Course Registration Telegram Bot - Main Application"""
+from venv import logger
+import os
+import sys
 from database import migrate_add_amount_paid
 from datetime import timedelta
 import logging
@@ -38,12 +41,25 @@ from database import crud, get_db, init_db
 from utils.helpers import handle_error
 import config
 
-# Set up logging
+log_dir = os.path.dirname(os.path.abspath(__file__))
+app_log = os.path.join(log_dir, 'bot.log')
+error_log = os.path.join(log_dir, 'bot_error.log')
+
+# Create handlers
+handlers = [logging.StreamHandler(sys.stdout)]  # Always log to console
+
+# Try to add file handlers
+try:
+    handlers.append(logging.FileHandler(app_log, mode='a'))
+    handlers.append(logging.FileHandler(error_log, mode='a'))
+except PermissionError:
+    print(f"Warning: Could not write to log files in {log_dir}")
+
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=getattr(logging, config.LOG_LEVEL.upper())
+    level=getattr(logging, config.LOG_LEVEL.upper()),
+    handlers=handlers
 )
-logger = logging.getLogger(__name__)
 
 def run_database_migration():
     """Run database migration to fix BigInteger issue"""
