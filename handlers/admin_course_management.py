@@ -334,26 +334,21 @@ async def course_reg_close_date_input(update: Update, context: ContextTypes.DEFA
     reg_close_str = course_data.get('registration_close_date').strftime('%Y-%m-%d') if course_data.get('registration_close_date') else 'لا يوجد / None'
     
     summary = f"""
-📋 **ملخص الكورس / Course Summary**
+📋 ملخص الكورس / Course Summary
 
-📌 **الاسم / Name:** {course_data['name']}
-
-📝 **الوصف / Description:**
+📌 الاسم / Name: {course_data['name']}
+📝 الوصف / Description:
 {course_data['description'][:200]}{'...' if len(course_data['description']) > 200 else ''}
 
-💰 **السعر / Price:** {course_data['price']:.2f} SDG
+💰 السعر / Price: {course_data['price']:.2f} SDG
+🔗 رابط المجموعة / Group Link: {course_data.get('group_link') or 'لا يوجد / None'}
+👥 العدد الأقصى / Max Students: {course_data.get('max_students') or 'غير محدود / Unlimited'}
 
-🔗 **رابط المجموعة / Group Link:** {course_data.get('group_link') or 'لا يوجد / None'}
+📅 تاريخ بداية الكورس / Course Start Date: {start_date_str}
+📅 تاريخ نهاية الكورس / Course End Date: {end_date_str}
 
-👥 **العدد الأقصى / Max Students:** {course_data.get('max_students') or 'غير محدود / Unlimited'}
-
-📅 **تاريخ بداية الكورس / Course Start Date:** {start_date_str}
-
-📅 **تاريخ نهاية الكورس / Course End Date:** {end_date_str}
-
-🟢 **تاريخ فتح التسجيل / Registration Opens:** {reg_open_str}
-
-🔴 **تاريخ إغلاق التسجيل / Registration Closes:** {reg_close_str}
+🟢 تاريخ فتح التسجيل / Registration Opens: {reg_open_str}
+🔴 تاريخ إغلاق التسجيل / Registration Closes: {reg_close_str}
 
 هل تريد حفظ هذا الكورس؟
 Do you want to save this course?
@@ -366,7 +361,7 @@ Do you want to save this course?
         ]
     ])
     
-    await update.message.reply_text(summary, reply_markup=keyboard, parse_mode='Markdown')
+    await update.message.reply_text(summary, reply_markup=keyboard)
     
     return COURSE_CONFIRM
 
