@@ -174,13 +174,20 @@ async def admin_approve_callback(update: Update, context: ContextTypes.DEFAULT_T
         user_chat_id = user.telegram_chat_id
         
         course = enrollment.course
-        course_names.append(course.course_name)
-        if course.telegram_group_link:
-            group_links.append(course.telegram_group_link)
-        
+        # Make sure course is loaded and has a name
+        if course:
+            course_names.append(course.course_name or "Unknown Course")
+            if course.telegram_group_link:
+                group_links.append(course.telegram_group_link)
+            else:
+                group_links.append(None)
+        else:
+            course_names.append("Unknown Course")
+            group_links.append(None)
+
         session.commit()
 
-    if user_chat_id:
+    if user_chat_id and course_names:
         await notify_user_payment_decision(
             context,
             user_chat_id,
