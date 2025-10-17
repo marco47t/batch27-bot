@@ -173,19 +173,19 @@ async def admin_approve_callback(update: Update, context: ContextTypes.DEFAULT_T
         user = enrollment.user
         user_chat_id = user.telegram_chat_id
         
+        # Explicitly access course to ensure it's loaded before session closes
         course = enrollment.course
-        # Make sure course is loaded and has a name
         if course:
-            course_names.append(course.course_name or "Unknown Course")
-            if course.telegram_group_link:
-                group_links.append(course.telegram_group_link)
-            else:
-                group_links.append(None)
-        else:
-            course_names.append("Unknown Course")
-            group_links.append(None)
-
+            # Force load the course_name attribute
+            course_name = str(course.course_name) if course.course_name else "Unknown Course"
+            telegram_group_link = str(course.telegram_group_link) if course.telegram_group_link else None
+            
+            course_names.append(course_name)
+            if telegram_group_link:
+                group_links.append(telegram_group_link)
+        
         session.commit()
+
 
     if user_chat_id and course_names:
         await notify_user_payment_decision(
@@ -399,10 +399,17 @@ async def admin_approve_failed_callback(update: Update, context: ContextTypes.DE
             # Collect course info
             user = enrollment.user
             user_chat_id = user.telegram_chat_id
+            
+            # Force load course attributes before session closes
             course = enrollment.course
-            course_names.append(course.course_name)
-            if course.telegram_group_link:
-                group_links.append(course.telegram_group_link)
+            if course:
+                course_name = str(course.course_name) if course.course_name else "Unknown Course"
+                telegram_group_link = str(course.telegram_group_link) if course.telegram_group_link else None
+                
+                course_names.append(course_name)
+                if telegram_group_link:
+                    group_links.append(telegram_group_link)
+
         
         # Clear user's cart if this was initial payment
         if enrollment_ids:
