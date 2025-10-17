@@ -304,11 +304,11 @@ async def course_reg_close_date_input(update: Update, context: ContextTypes.DEFA
                 return COURSE_REG_CLOSE_DATE
             
             # Validate: close date should be before course start
-            start_date = context.user_data['new_course'].get('start_date')
-            if start_date and reg_close_date > start_date:
+            end_date = context.user_data['new_course'].get('end_date')
+            if end_date and reg_close_date > end_date:
                 await update.message.reply_text(
-                    "❌ يجب إغلاق التسجيل قبل بداية الكورس.\n"
-                    "Registration must close before the course starts.\n\n"
+                    "❌ يجب إغلاق التسجيل قبل أو في نهاية الكورس.\n"
+                    "Registration must close close before or on the course end date.\n\n"
                     "Send /skip to skip."
                 )
                 return COURSE_REG_CLOSE_DATE
@@ -651,7 +651,6 @@ async def edit_input_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     try:
                         reg_close = datetime.strptime(new_value, '%Y-%m-%d')
-                        
                         # Validate: close date should be after open date
                         if course.registration_open_date and reg_close < course.registration_open_date:
                             await update.message.reply_text(
@@ -659,7 +658,13 @@ async def edit_input_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 "Registration closing date must be after opening date."
                             )
                             return ConversationHandler.END
-                        
+                        # Validate: close date should not be after course end
+                        if course.end_date and reg_close > course.end_date:
+                            await update.message.reply_text(
+                                "❌ يجب إغلاق التسجيل قبل أو في نهاية الكورس.\n"
+                                "Registration must close before or on the course end date."
+                            )
+                            return ConversationHandler.END
                         course.registration_close_date = reg_close
                     except ValueError:
                         await update.message.reply_text(
