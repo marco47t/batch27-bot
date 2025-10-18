@@ -32,7 +32,7 @@ class User(Base):
     username = Column(String(255), nullable=True)
     first_name = Column(String(255), nullable=True)
     last_name = Column(String(255), nullable=True)
-    telegram_chat_id = Column(Integer, nullable=False)
+    telegram_chat_id = Column(BigInteger, nullable=False)
     registration_date = Column(DateTime, default=func.now(), nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     is_admin = Column(Boolean, default=False, nullable=False)
