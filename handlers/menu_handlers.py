@@ -458,3 +458,35 @@ async def complete_payment_callback(update: Update, context: ContextTypes.DEFAUL
             reply_markup=payment_upload_keyboard(),
             parse_mode='Markdown'
         )
+
+async def contact_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle contact admin button from main menu"""
+    query = update.callback_query
+    await query.answer()
+    
+    message = """
+📞 **التواصل مع الإدارة / Contact Admin**
+
+يمكنك إرسال رسالتك الآن وسيتم إيصالها للإدارة.
+
+Please send your message now and it will be forwarded to administration.
+
+💡 يمكنك إرسال:
+- نص
+- صور
+- مستندات
+
+💡 You can send:
+- Text
+- Images
+- Documents
+"""
+    
+    await query.edit_message_text(
+        message,
+        parse_mode='Markdown',
+        reply_markup=back_to_main_keyboard()
+    )
+    
+    # Set state
+    context.user_data['awaiting_support_message'] = True

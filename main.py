@@ -37,7 +37,8 @@ from handlers import (
     admin_pending_registrations,
 )
 from handlers.course_handlers import handle_legal_name_during_registration
-
+from handlers.support_handlers import receive_support_message, contact_admin_command, cancel_support, AWAITING_SUPPORT_MESSAGE
+from handlers.menu_handlers import contact_admin_callback
 from database import crud, get_db, init_db
 from utils.helpers import handle_error
 import config
@@ -479,7 +480,27 @@ def main():
 
     # Simple command handlers
     application.add_handler(CommandHandler('receiptstoday', admin_receipt_management.receipts_today_command))
+    # ==========================
+    # ADMIN SUPPORT HANDLERS
+    # ==========================
+    application.add_handler(CommandHandler("contact", contact_admin_command))
 
+    # Add conversation handler for support messages
+    support_conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("contact", contact_admin_command),
+            CallbackQueryHandler(contact_admin_callback, pattern="^contact_admin$")
+        ],
+        states={
+            AWAITING_SUPPORT_MESSAGE: [
+                MessageHandler(filters.TEXT | filters.PHOTO | filters.Document.ALL, receive_support_message)
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_support)],
+        allow_reentry=True
+    )
+
+    application.add_handler(support_conv_handler)
     # ==========================
     # FILE/IMAGE HANDLERS
     # ==========================
