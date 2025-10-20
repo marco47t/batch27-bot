@@ -98,56 +98,44 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
     
     logger.info(f"Receipt downloaded to temp path for user {telegram_user_id}: {temp_path}")
     log_user_action(telegram_user_id, "receipt_uploaded", f"temp_path={temp_path}")
-    
+
     # Notify user that processing started
     await update.message.reply_text(receipt_processing_message(), reply_markup=None)
-    
+
     # Get expected amount
     expected_amount_for_gemini = context.user_data.get("reupload_amount") or context.user_data.get("current_payment_total")
-    
+
     if expected_amount_for_gemini is None:
         logger.error(f"User {telegram_user_id} missing expected payment amount")
         await update.message.reply_text(error_message("payment_amount_missing"), reply_markup=back_to_main_keyboard())
         log_user_action(telegram_user_id, "receipt_upload_failed", "expected_amount_for_gemini missing")
         context.user_data["awaiting_receipt_upload"] = False
-        # Clean up temp file
         if os.path.exists(temp_path):
             os.remove(temp_path)
         return
-    
-    # ==================== FRAUD DETECTION SYSTEM ====================
-    
+
+    # ==================== STEP 1: GEMINI AI VALIDATION ====================
     logger.info(f"Starting Gemini validation for user {telegram_user_id}: expected_amount=${expected_amount_for_gemini}")
-    
-    # Step 1: Run Gemini AI validation
+
     gemini_result = await validate_receipt_with_gemini_ai(
         temp_path,
         expected_amount_for_gemini,
         config.EXPECTED_ACCOUNT_NUMBER
     )
-    
-    logger.info(f"Gemini validation result for user {telegram_user_id}: is_valid={gemini_result.get('is_valid')}, account={gemini_result.get('account_number')}, amount={gemini_result.get('amount')}")
-    
-    # Step 2: Run comprehensive fraud detection analysis
-    logger.info(f"Running fraud detection analysis for user {telegram_user_id}")
-    fraud_analysis = calculate_consolidated_fraud_score(
-        internal_user_id,
-        temp_path,
-        gemini_result
-    )
-    
-    logger.info(f"Fraud analysis for user {telegram_user_id}: Score={fraud_analysis['fraud_score']}, Risk={fraud_analysis['risk_level']}, Action={fraud_analysis['action']}")
-        # ==================== ENHANCED FRAUD DETECTION WITH METADATA ====================
+
+    logger.info(f"Gemini validation result: is_valid={gemini_result.get('is_valid')}, amount={gemini_result.get('amount')}, tx_id={gemini_result.get('transaction_id')}")
+
+    # ==================== STEP 2: ENHANCED FRAUD DETECTION ====================
     logger.info(f"Starting enhanced fraud detection for user {telegram_user_id}")
-        
-    # ===== STEP 1: CHECK FOR DUPLICATE TRANSACTION ID =====
+
+    # ===== CHECK FOR DUPLICATE TRANSACTION ID =====
     transaction_id = gemini_result.get("transaction_id")
     duplicate_check_result = {
         "transaction_id_duplicate": False,
         "is_duplicate": False,
         "similarity_score": 0
     }
-        
+
     if transaction_id:
         is_duplicate_tx = crud.check_duplicate_transaction_id(session, transaction_id)
         if is_duplicate_tx:
@@ -158,57 +146,34 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
             logger.info(f"✅ Transaction ID is unique: {transaction_id}")
     else:
         logger.warning(f"⚠️ No transaction ID extracted from receipt")
-    
-    # ===== STEP 2: IMAGE DUPLICATE CHECK =====
+
+    # ===== IMAGE DUPLICATE CHECK =====
     from services.duplicate_detector import check_duplicate_receipt_async
     duplicate_image_check = await check_duplicate_receipt_async(temp_path, session, internal_user_id)
-    
-    # Merge results
+
     duplicate_check_result["is_duplicate"] = duplicate_image_check.get("is_duplicate", False)
     duplicate_check_result["similarity_score"] = duplicate_image_check.get("similarity_score", 0)
-    
+
     if duplicate_check_result["is_duplicate"]:
         logger.warning(f"⚠️ Duplicate image detected: similarity={duplicate_check_result['similarity_score']}%")
-    
-    # ===== STEP 3: IMAGE FORENSICS ANALYSIS =====
+
+    # ===== IMAGE FORENSICS ANALYSIS =====
     from services.image_forensics import analyze_receipt_forensics
     image_forensics_result = analyze_receipt_forensics(temp_path)
-    logger.info(f"Image forensics complete: is_forged={image_forensics_result.get('is_forged')}, ela_score={image_forensics_result.get('ela_score', 0)}")
-    
-    # ===== STEP 4: CALCULATE CONSOLIDATED FRAUD SCORE =====
+    logger.info(f"Image forensics: is_forged={image_forensics_result.get('is_forged')}, ela_score={image_forensics_result.get('ela_score', 0)}")
+
+    # ===== CALCULATE CONSOLIDATED FRAUD SCORE =====
     fraud_analysis = calculate_consolidated_fraud_score(
-    gemini_result,
+        gemini_result,
         image_forensics_result,
         duplicate_check_result
     )
-    
-    logger.info(f"🎯 Fraud Analysis Complete - Score: {fraud_analysis['fraud_score']}/100, Risk: {fraud_analysis['risk_level']}, Action: {fraud_analysis['recommendation']}")
-    logger.info(f"📋 Fraud indicators: {fraud_analysis['fraud_indicators']}")
-    
-    # ===== STEP 5: STORE RECEIPT METADATA IN DATABASE =====
-    # Store metadata for ALL enrollments (even if fraud detected - for tracking)
-    logger.info(f"💾 Storing receipt metadata...")
 
-    for enrollment_id in enrollment_ids_to_update:
-        metadata_stored = crud.update_enrollment_receipt_metadata(
-            session,
-            enrollment_id=enrollment_id,
-            transaction_id=gemini_result.get("transaction_id"),
-            transfer_date=gemini_result.get("transfer_datetime"),
-            sender_name=gemini_result.get("sender_name") or gemini_result.get("recipient_name")
-        )
-        if metadata_stored:
-            logger.info(f"✅ Stored metadata for enrollment {enrollment_id}: TxID={gemini_result.get('transaction_id')}, Date={gemini_result.get('date')}, Sender={gemini_result.get('sender_name')}")
-        else:
-            logger.warning(f"⚠️ Failed to store metadata for enrollment {enrollment_id}")
-    
-    # Commit metadata changes
-    session.commit()
-    
-    # ==================== UPLOAD TO S3 ====================
-    
+    logger.info(f"🎯 Fraud Analysis - Score: {fraud_analysis['fraud_score']}/100, Risk: {fraud_analysis['risk_level']}, Action: {fraud_analysis['recommendation']}")
+    logger.info(f"📋 Fraud indicators: {fraud_analysis['fraud_indicators']}")
+
+    # ==================== STEP 3: UPLOAD TO S3 ====================
     try:
-        # Get first enrollment ID for S3 folder structure
         resubmission_enrollment_id = context.user_data.get("resubmission_enrollment_id")
         if resubmission_enrollment_id:
             enrollment_id_for_s3 = resubmission_enrollment_id
@@ -216,14 +181,12 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
             current_payment_enrollment_ids = context.user_data.get("current_payment_enrollment_ids", [])
             enrollment_id_for_s3 = current_payment_enrollment_ids[0] if current_payment_enrollment_ids else 0
         
-        # Upload to S3
         s3_url = upload_receipt_to_s3(temp_path, internal_user_id, enrollment_id_for_s3)
-        file_path = s3_url  # Use S3 URL as file_path
-        logger.info(f"✅ Receipt uploaded to S3 for user {telegram_user_id}: {s3_url}")
+        file_path = s3_url
+        logger.info(f"✅ Receipt uploaded to S3: {s3_url}")
         
     except Exception as e:
-        logger.error(f"❌ Failed to upload receipt to S3 for user {telegram_user_id}: {e}")
-        # Fallback: keep using temp_path (will be stored locally)
+        logger.error(f"❌ S3 upload failed: {e}")
         file_path = temp_path
         logger.warning(f"Using local temp path as fallback: {temp_path}")
     
