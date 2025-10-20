@@ -33,6 +33,10 @@ class User(Base):
     first_name = Column(String(255), nullable=True)
     last_name = Column(String(255), nullable=True)
     telegram_chat_id = Column(BigInteger, nullable=False)
+    legal_name_first = Column(String(255), nullable=True)  # First name
+    legal_name_father = Column(String(255), nullable=True)  # Father's name
+    legal_name_grandfather = Column(String(255), nullable=True)  # Grandfather's name
+    legal_name_great_grandfather = Column(String(255), nullable=True)  # Great grandfather's name
     registration_date = Column(DateTime, default=func.now(), nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     is_admin = Column(Boolean, default=False, nullable=False)

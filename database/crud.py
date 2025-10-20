@@ -657,3 +657,75 @@ def update_enrollment_partial_payment(session: Session, enrollment_id: int, amou
         session.refresh(enrollment)
     
     return enrollment
+
+def update_user_legal_name(
+    session: Session, 
+    user_id: int, 
+    legal_name_first: str,
+    legal_name_father: str,
+    legal_name_grandfather: str,
+    legal_name_great_grandfather: str
+) -> bool:
+    """
+    Update user's legal name (4 parts)
+    
+    Args:
+        session: Database session
+        user_id: User ID
+        legal_name_first: First name
+        legal_name_father: Father's name
+        legal_name_grandfather: Grandfather's name
+        legal_name_great_grandfather: Great grandfather's name
+    
+    Returns:
+        bool: True if updated successfully
+    """
+    try:
+        user = session.query(User).filter(User.user_id == user_id).first()
+        if not user:
+            return False
+        
+        user.legal_name_first = legal_name_first.strip()
+        user.legal_name_father = legal_name_father.strip()
+        user.legal_name_grandfather = legal_name_grandfather.strip()
+        user.legal_name_great_grandfather = legal_name_great_grandfather.strip()
+        
+        session.commit()
+        logger.info(f"Updated legal name for user {user_id}")
+        return True
+        
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error updating legal name for user {user_id}: {e}")
+        return False
+
+
+def get_user_legal_name(session: Session, user_id: int) -> Optional[str]:
+    """
+    Get user's full legal name (all 4 parts combined)
+    
+    Returns:
+        str: Full legal name or None if not set
+    """
+    try:
+        user = session.query(User).filter(User.user_id == user_id).first()
+        if not user:
+            return None
+        
+        # Check if legal name is set
+        if not user.legal_name_first:
+            return None
+        
+        # Combine all parts
+        name_parts = [
+            user.legal_name_first,
+            user.legal_name_father,
+            user.legal_name_grandfather,
+            user.legal_name_great_grandfather
+        ]
+        
+        return " ".join(filter(None, name_parts))
+        
+    except Exception as e:
+        logger.error(f"Error getting legal name for user {user_id}: {e}")
+        return None
