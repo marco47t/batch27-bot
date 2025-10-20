@@ -747,3 +747,88 @@ def has_legal_name(session: Session, user_id: int) -> bool:
     except Exception as e:
         logger.error(f"Error checking legal name for user {user_id}: {e}")
         return False
+    
+def check_duplicate_transaction_id(session: Session, transaction_id: str, exclude_enrollment_id: int = None) -> bool:
+    """
+    Check if transaction ID has been used before
+    
+    Args:
+        session: Database session
+        transaction_id: Transaction ID to check
+        exclude_enrollment_id: Optional enrollment ID to exclude from check
+    
+    Returns:
+        True if duplicate found, False otherwise
+    """
+    try:
+        if not transaction_id:
+            return False
+        
+        query = session.query(Enrollment).filter(
+            Enrollment.receipt_transaction_id == transaction_id
+        )
+        
+        if exclude_enrollment_id:
+            query = query.filter(Enrollment.enrollment_id != exclude_enrollment_id)
+        
+        duplicate = query.first()
+        
+        if duplicate:
+            logger.warning(f"Duplicate transaction ID found: {transaction_id} (enrollment_id: {duplicate.enrollment_id})")
+            return True
+        
+        return False
+        
+    except Exception as e:
+        logger.error(f"Error checking duplicate transaction ID: {e}")
+        return False
+
+
+def update_enrollment_receipt_metadata(
+    session: Session,
+    enrollment_id: int,
+    transaction_id: str = None,
+    transfer_date: datetime = None,
+    sender_name: str = None
+) -> bool:
+    """
+    Update enrollment with receipt metadata for duplicate detection
+    
+    Args:
+        session: Database session
+        enrollment_id: Enrollment ID to update
+        transaction_id: Unique transaction identifier
+        transfer_date: Date when transfer was made
+        sender_name: Name of person who sent payment
+    
+    Returns:
+        True if updated successfully
+    """
+    try:
+        enrollment = session.query(Enrollment).filter(
+            Enrollment.enrollment_id == enrollment_id
+        ).first()
+        
+        if not enrollment:
+            logger.error(f"Enrollment {enrollment_id} not found")
+            return False
+        
+        # Update metadata fields
+        if transaction_id:
+            enrollment.receipt_transaction_id = transaction_id
+        if transfer_date:
+            enrollment.receipt_transfer_date = transfer_date
+        if sender_name:
+            enrollment.receipt_sender_name = sender_name
+        
+        # Always update submission date
+        enrollment.receipt_submission_date = datetime.utcnow()
+        
+        session.commit()
+        logger.info(f"Updated receipt metadata for enrollment {enrollment_id}: TxID={transaction_id}, TransferDate={transfer_date}, Sender={sender_name}")
+        return True
+        
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error updating receipt metadata for enrollment {enrollment_id}: {e}")
+        return False

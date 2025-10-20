@@ -137,6 +137,73 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
     )
     
     logger.info(f"Fraud analysis for user {telegram_user_id}: Score={fraud_analysis['fraud_score']}, Risk={fraud_analysis['risk_level']}, Action={fraud_analysis['action']}")
+        # ==================== ENHANCED FRAUD DETECTION WITH METADATA ====================
+    logger.info(f"Starting enhanced fraud detection for user {telegram_user_id}")
+        
+    # ===== STEP 1: CHECK FOR DUPLICATE TRANSACTION ID =====
+    transaction_id = gemini_result.get("transaction_id")
+    duplicate_check_result = {
+        "transaction_id_duplicate": False,
+        "is_duplicate": False,
+        "similarity_score": 0
+    }
+        
+    if transaction_id:
+        is_duplicate_tx = crud.check_duplicate_transaction_id(session, transaction_id)
+        if is_duplicate_tx:
+            duplicate_check_result["transaction_id_duplicate"] = True
+            duplicate_check_result["duplicate_transaction_id"] = transaction_id
+            logger.warning(f"⚠️ Duplicate transaction ID detected: {transaction_id}")
+        else:
+            logger.info(f"✅ Transaction ID is unique: {transaction_id}")
+    else:
+        logger.warning(f"⚠️ No transaction ID extracted from receipt")
+    
+    # ===== STEP 2: IMAGE DUPLICATE CHECK =====
+    from services.duplicate_detector import check_duplicate_receipt_async
+    duplicate_image_check = await check_duplicate_receipt_async(temp_path, session, internal_user_id)
+    
+    # Merge results
+    duplicate_check_result["is_duplicate"] = duplicate_image_check.get("is_duplicate", False)
+    duplicate_check_result["similarity_score"] = duplicate_image_check.get("similarity_score", 0)
+    
+    if duplicate_check_result["is_duplicate"]:
+        logger.warning(f"⚠️ Duplicate image detected: similarity={duplicate_check_result['similarity_score']}%")
+    
+    # ===== STEP 3: IMAGE FORENSICS ANALYSIS =====
+    from services.image_forensics import analyze_receipt_forensics
+    image_forensics_result = analyze_receipt_forensics(temp_path)
+    logger.info(f"Image forensics complete: is_forged={image_forensics_result.get('is_forged')}, ela_score={image_forensics_result.get('ela_score', 0)}")
+    
+    # ===== STEP 4: CALCULATE CONSOLIDATED FRAUD SCORE =====
+    fraud_analysis = calculate_consolidated_fraud_score(
+    gemini_result,
+        image_forensics_result,
+        duplicate_check_result
+    )
+    
+    logger.info(f"🎯 Fraud Analysis Complete - Score: {fraud_analysis['fraud_score']}/100, Risk: {fraud_analysis['risk_level']}, Action: {fraud_analysis['recommendation']}")
+    logger.info(f"📋 Fraud indicators: {fraud_analysis['fraud_indicators']}")
+    
+    # ===== STEP 5: STORE RECEIPT METADATA IN DATABASE =====
+    # Store metadata for ALL enrollments (even if fraud detected - for tracking)
+    logger.info(f"💾 Storing receipt metadata...")
+
+    for enrollment_id in enrollment_ids_to_update:
+        metadata_stored = crud.update_enrollment_receipt_metadata(
+            session,
+            enrollment_id=enrollment_id,
+            transaction_id=gemini_result.get("transaction_id"),
+            transfer_date=gemini_result.get("transfer_datetime"),
+            sender_name=gemini_result.get("sender_name") or gemini_result.get("recipient_name")
+        )
+        if metadata_stored:
+            logger.info(f"✅ Stored metadata for enrollment {enrollment_id}: TxID={gemini_result.get('transaction_id')}, Date={gemini_result.get('date')}, Sender={gemini_result.get('sender_name')}")
+        else:
+            logger.warning(f"⚠️ Failed to store metadata for enrollment {enrollment_id}")
+    
+    # Commit metadata changes
+    session.commit()
     
     # ==================== UPLOAD TO S3 ====================
     

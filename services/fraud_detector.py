@@ -1,107 +1,93 @@
-# services/fraud_detector.py
+"""
+Enhanced fraud detection with receipt age analysis
+"""
 
-from typing import Dict, Any
 import logging
-from .image_forensics import analyze_image_metadata
-from .ela_detector import perform_ela
-from .duplicate_detector import check_duplicate_submission
+from datetime import datetime, timedelta
+from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 
+
 def calculate_consolidated_fraud_score(
-    user_id: int,
-    image_path: str,
-    gemini_result: Dict[str, Any]
+    gemini_result: Dict[str, Any],
+    image_forensics_result: Dict[str, Any],
+    duplicate_check_result: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
-    Combine multiple fraud detection signals into consolidated score
-    Score: 0-100 where 100 = highest fraud risk
+    Calculate consolidated fraud score with receipt age detection
     
-    IMPORTANT: Screenshots are NORMAL and NOT penalized
+    Returns:
+        dict with fraud_score (0-100) and risk_level
     """
     
-    fraud_score = 0
     fraud_indicators = []
-    checks_performed = []
+    fraud_score = 0
+    max_score = 100
     
-    # 1. EXIF Metadata Analysis (Weight: 20 points max)
-    # SCREENSHOTS ARE NORMAL - NO PENALTY
-    logger.info(f"Running metadata analysis for user {user_id}")
-    metadata_result = analyze_image_metadata(image_path)
-    checks_performed.append("metadata_analysis")
+    # === GEMINI AI ANALYSIS (40 points) ===
+    gemini_authenticity = gemini_result.get("authenticity_score", 100)
+    gemini_fraud_contribution = max(0, (100 - gemini_authenticity) * 0.4)
+    fraud_score += gemini_fraud_contribution
     
-    if metadata_result.get("screenshot_flag"):
-        # Screenshot is NORMAL - just note it, no penalty
-        fraud_indicators.append("Receipt is a screenshot (normal for users)")
-        logger.info(f"User {user_id} submitted screenshot - this is expected")
-    elif metadata_result["risk_level"] == "HIGH":
-        fraud_score += 20
-        fraud_indicators.append(f"Metadata: {metadata_result['reason']}")
-    elif metadata_result["risk_level"] == "MEDIUM":
-        fraud_score += 10
-        fraud_indicators.append(f"Metadata warning: {metadata_result['reason']}")
+    if gemini_authenticity < 60:
+        fraud_indicators.append(f"Gemini authenticity low: {gemini_authenticity}%")
     
-    # 2. Error Level Analysis (Weight: 25 points max)
-    # More lenient for screenshots
-    logger.info(f"Running ELA for user {user_id}")
-    ela_result = perform_ela(image_path)
-    checks_performed.append("error_level_analysis")
+    # Tampering indicators
+    tampering = gemini_result.get("tampering_indicators", [])
+    if tampering:
+        fraud_score += len(tampering) * 5  # 5 points per indicator
+        for indicator in tampering:
+            fraud_indicators.append(f"Tampering: {indicator}")
     
-    if ela_result["risk_level"] == "HIGH":
-        fraud_score += 25
-        fraud_indicators.append(f"Image tampering detected: {ela_result['message']}")
-    elif ela_result["risk_level"] == "MEDIUM":
-        fraud_score += 10  # Reduced from 12 for screenshot tolerance
-        fraud_indicators.append(f"Possible tampering: {ela_result['message']}")
+    # ✅ NEW: Old receipt penalty (days since transfer)
+    days_since_transfer = gemini_result.get("days_since_transfer")
+    if days_since_transfer and days_since_transfer > 5:
+        # Add 2 points per day after 5 days (max 20 points)
+        old_receipt_penalty = min(20, (days_since_transfer - 5) * 2)
+        fraud_score += old_receipt_penalty
+        fraud_indicators.append(f"Old receipt: {days_since_transfer} days since transfer (penalty: +{old_receipt_penalty} points)")
+        logger.warning(f"Old receipt detected: {days_since_transfer} days old, penalty: +{old_receipt_penalty}")
     
-    # 3. Duplicate Detection (Weight: 30 points)
-    logger.info(f"Running duplicate check for user {user_id}")
-    duplicate_result = check_duplicate_submission(user_id, image_path)
-    checks_performed.append("duplicate_detection")
-    
-    if duplicate_result["is_duplicate"]:
+    # === IMAGE FORENSICS (30 points) ===
+    if image_forensics_result.get("is_forged"):
         fraud_score += 30
-        fraud_indicators.append(f"Duplicate: {duplicate_result['message']}")
+        fraud_indicators.append("Image forensics: Possible forgery detected")
     
-    # 4. Gemini AI Analysis (Weight: 25 points)
-    checks_performed.append("ai_validation")
+    # ELA analysis
+    ela_score = image_forensics_result.get("ela_score", 0)
+    if ela_score > 50:
+        ela_contribution = (ela_score / 100) * 15
+        fraud_score += ela_contribution
+        fraud_indicators.append(f"ELA anomaly score: {ela_score}%")
     
-    if not gemini_result.get("is_valid", False):
-        fraud_score += 15
-        fraud_indicators.append(f"AI validation failed: {gemini_result.get('reason', 'Unknown')}")
+    # === DUPLICATE DETECTION (30 points) ===
+    if duplicate_check_result.get("is_duplicate"):
+        fraud_score += 30
+        similarity = duplicate_check_result.get("similarity_score", 0)
+        fraud_indicators.append(f"Duplicate receipt detected (similarity: {similarity}%)")
     
-    # Check for tampering indicators from Gemini
-    tampering_indicators = gemini_result.get("tampering_indicators", [])
-    if tampering_indicators:
-        fraud_score += min(len(tampering_indicators) * 3, 10)
-        for indicator in tampering_indicators[:2]:  # Add top 2
-            fraud_indicators.append(f"AI detected: {indicator}")
+    # ✅ NEW: Transaction ID duplicate check
+    if duplicate_check_result.get("transaction_id_duplicate"):
+        fraud_score += 25
+        fraud_indicators.append(f"Transaction ID already used: {duplicate_check_result.get('duplicate_transaction_id')}")
     
-    # Check authenticity score from Gemini
-    authenticity_score = gemini_result.get("authenticity_score", 100)
-    if authenticity_score < 70:
-        fraud_score += 10
-        fraud_indicators.append(f"Low authenticity score: {authenticity_score}/100")
+    # Cap fraud score at 100
+    fraud_score = min(100, fraud_score)
     
-    # Determine risk level and action
-    if fraud_score >= 40:
+    # Determine risk level
+    if fraud_score >= 70:
         risk_level = "HIGH"
-        action = "REJECT"
-    elif fraud_score >= 20:
+    elif fraud_score >= 40:
         risk_level = "MEDIUM"
-        action = "MANUAL_REVIEW"
     else:
         risk_level = "LOW"
-        action = "APPROVE"
+    
+    logger.info(f"Consolidated fraud score: {fraud_score}/100 (Risk: {risk_level})")
     
     return {
-        "fraud_score": min(fraud_score, 100),
+        "fraud_score": round(fraud_score, 2),
         "risk_level": risk_level,
-        "action": action,
         "fraud_indicators": fraud_indicators,
-        "checks_performed": checks_performed,
-        "metadata_check": metadata_result,
-        "ela_check": ela_result,
-        "duplicate_check": duplicate_result,
-        "ai_validation": gemini_result
+        "recommendation": "REJECT" if fraud_score >= 70 else "MANUAL_REVIEW" if fraud_score >= 40 else "ACCEPT"
     }
