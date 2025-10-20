@@ -305,33 +305,25 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
             session.commit()
             
             # Build detailed rejection message for user
-            rejection_msg = f"""
-❌ <b>تم رفض الإيصال - Receipt Rejected</b>
+            rejection_msg = user_message = """
+❌ **لم يتم قبول الإيصال**
 
-تم اكتشاف علامات احتيال محتملة في الإيصال المرسل:
-<b>Potential fraud indicators detected in the submitted receipt:</b>
+عذراً، لم نتمكن من التحقق من الإيصال المرسل.
 
+سيتم مراجعته من قبل الإدارة خلال 24-48 ساعة.
+
+إذا كانت لديك أية استفسارات، يرجى التواصل مع الإدارة.
+
+---
+❌ **Receipt Not Accepted**
+
+Sorry, we couldn't verify the submitted receipt.
+
+It will be reviewed by administration within 24-48 hours.
+
+If you have any questions, please contact administration.
 """
-            for i, indicator in enumerate(fraud_analysis["fraud_indicators"][:3], 1):
-                rejection_msg += f"{i}. {indicator}\n"
-            
-            rejection_msg += f"""
-<b>مستوى المخاطر: {fraud_analysis['risk_level']}</b>
-<b>Risk Level: {fraud_analysis['risk_level']}</b>
 
-<b>نقاط الاحتيال: {fraud_analysis['fraud_score']}/100</b>
-<b>Fraud Score: {fraud_analysis['fraud_score']}/100</b>
-
-يرجى التأكد من:
-• إرسال إيصال أصلي غير معدل
-• التقاط صورة واضحة من الجهاز مباشرة
-• عدم استخدام لقطة شاشة
-
-Please ensure:
-• Send an original, unedited receipt
-• Capture a clear photo directly from your device
-• Do not use screenshots
-"""
             
             await update.message.reply_text(rejection_msg, reply_markup=back_to_main_keyboard(), parse_mode='HTML')
             
@@ -480,22 +472,22 @@ ID: <code>{telegram_user_id}</code>
             
             # Notify user about manual review
             review_msg = f"""
-⏳ <b>إيصالك قيد المراجعة اليدوية</b>
-<b>Your receipt is under manual review</b>
+⏳ **قيد المراجعة**
 
-تم وضع علامة على إيصالك للمراجعة اليدوية من قبل فريقنا.
-Your receipt has been flagged for manual review by our team.
+تم استلام الإيصال وسيتم مراجعته من قبل الإدارة.
 
-<b>السبب:</b> بعض العلامات التحذيرية تتطلب تحققًا إضافيًا
-<b>Reason:</b> Some warning indicators require additional verification
+⏱️ سيتم الرد خلال 24-48 ساعة.
 
-⏰ <b>الوقت المتوقع:</b> 24 ساعة
-<b>Expected time:</b> 24 hours
+شكراً لتفهمك.
 
-سيتم إخطارك بمجرد اكتمال المراجعة.
-You'll be notified once the review is complete.
+---
+⏳ **Under Review**
 
-<b>نقاط التحذير: {fraud_analysis['fraud_score']}/100</b>
+Receipt received and will be reviewed by administration.
+
+⏱️ You will receive a response within 24-48 hours.
+
+Thank you for your patience.
 """
             
             await update.message.reply_text(review_msg, reply_markup=back_to_main_keyboard(), parse_mode='HTML')
