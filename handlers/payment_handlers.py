@@ -374,7 +374,7 @@ ID: <code>{telegram_user_id}</code>
             
             admin_msg += f"""
 🔍 Checks Performed:
-{', '.join(fraud_analysis['checks_performed'])}
+{fraud_analysis.get('checks_performed', ['Fraud checks completed'])}
 
 📄 Extracted Data:
 - Account: {gemini_result.get('account_number', 'N/A')}
