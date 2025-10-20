@@ -1,26 +1,51 @@
 """
-Support/Contact Admin System
-Allows users to send messages to admins
+Support/Contact Admin System - Simplified
 """
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram import Update
+from telegram.ext import ContextTypes
 from database import crud, get_db
-from utils.helpers import send_admin_notification
 from utils.keyboards import back_to_main_keyboard
 import config
 import logging
 
 logger = logging.getLogger(__name__)
 
-# Conversation states
-AWAITING_SUPPORT_MESSAGE = 1
+
+async def contact_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle contact admin button from main menu"""
+    query = update.callback_query
+    await query.answer()
+    
+    message = """
+📞 **التواصل مع الإدارة / Contact Admin**
+
+يمكنك إرسال رسالتك الآن وسيتم إيصالها للإدارة.
+
+Please send your message now and it will be forwarded to administration.
+
+💡 يمكنك إرسال:
+- نص / Text
+- صور / Images  
+- مستندات / Documents
+
+⬇️ أرسل رسالتك الآن
+⬇️ Send your message now
+"""
+    
+    await query.edit_message_text(
+        message,
+        parse_mode='Markdown',
+        reply_markup=back_to_main_keyboard()
+    )
+    
+    # Set flag in user data
+    context.user_data['awaiting_support_message'] = True
+    logger.info(f"User {query.from_user.id} initiated contact with admin")
 
 
 async def contact_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /contact command - Start conversation to contact admin
-    """
+    """/contact command"""
     user = update.effective_user
     
     message = """
@@ -31,16 +56,12 @@ async def contact_admin_command(update: Update, context: ContextTypes.DEFAULT_TY
 Please send your message now and it will be forwarded to administration.
 
 💡 يمكنك إرسال:
-- نص
-- صور
-- مستندات
+- نص / Text
+- صور / Images  
+- مستندات / Documents
 
-💡 You can send:
-- Text
-- Images
-- Documents
-
-❌ لإلغاء الإرسال اكتب: /cancel
+⬇️ أرسل رسالتك الآن
+⬇️ Send your message now
 """
     
     await update.message.reply_text(
@@ -49,73 +70,78 @@ Please send your message now and it will be forwarded to administration.
         reply_markup=back_to_main_keyboard()
     )
     
-    # Set state to wait for message
     context.user_data['awaiting_support_message'] = True
-    return AWAITING_SUPPORT_MESSAGE
+    logger.info(f"User {user.id} used /contact command")
 
 
-async def receive_support_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Receive and forward user's message to admin
+    Handle incoming messages when user is in support mode
+    This should be checked in your main message handler
     """
+    # Check if user is in support mode
     if not context.user_data.get('awaiting_support_message'):
-        return ConversationHandler.END
+        return False  # Not handling this message
     
     user = update.effective_user
     message = update.message
     
-    # Get user info from database
+    # Get user info
     with get_db() as session:
         db_user = crud.get_user_by_telegram_id(session, user.id)
-        
         if db_user:
             user_display = f"{db_user.full_name} (ID: {db_user.user_id})"
         else:
-            user_display = f"{user.first_name} {user.last_name or ''} (Telegram: {user.id})"
+            user_display = f"{user.first_name} {user.last_name or ''}"
     
-    # Build admin notification
-    admin_message = f"""
-📩 **رسالة جديدة من مستخدم / New User Message**
+    # Build admin message
+    admin_header = f"""
+📩 **رسالة من مستخدم / User Message**
 
-👤 **المستخدم / User:** {user_display}
-📱 **Telegram ID:** {user.id}
-🔗 **Profile:** tg://user?id={user.id}
+👤 {user_display}
+📱 Telegram: {user.id}
+🔗 [Profile](tg://user?id={user.id})
 
-📝 **الرسالة / Message:**
+━━━━━━━━━━━━━━━
 """
     
     try:
-        # Forward message to admin chat
+        # Forward based on message type
         if message.text:
-            # Text message
             await context.bot.send_message(
                 chat_id=config.ADMIN_CHAT_ID,
-                text=admin_message + f"\n{message.text}",
+                text=admin_header + f"📝 **Message:**\n{message.text}",
                 parse_mode='Markdown'
             )
         
         elif message.photo:
-            # Photo with caption
-            photo = message.photo[-1]  # Get highest resolution
-            caption = message.caption or "(No caption)"
+            photo = message.photo[-1]
+            caption = message.caption or ""
             await context.bot.send_photo(
                 chat_id=config.ADMIN_CHAT_ID,
                 photo=photo.file_id,
-                caption=admin_message + f"\n{caption}",
+                caption=admin_header + f"📷 **Photo:**\n{caption}",
                 parse_mode='Markdown'
             )
         
         elif message.document:
-            # Document
             await context.bot.send_document(
                 chat_id=config.ADMIN_CHAT_ID,
                 document=message.document.file_id,
-                caption=admin_message,
+                caption=admin_header + "📄 **Document**",
+                parse_mode='Markdown'
+            )
+        
+        elif message.voice:
+            await context.bot.send_voice(
+                chat_id=config.ADMIN_CHAT_ID,
+                voice=message.voice.file_id,
+                caption=admin_header + "🎤 **Voice message**",
                 parse_mode='Markdown'
             )
         
         else:
-            # Other message types
+            # For other types, just forward
             await context.bot.forward_message(
                 chat_id=config.ADMIN_CHAT_ID,
                 from_chat_id=message.chat_id,
@@ -123,46 +149,32 @@ async def receive_support_message(update: Update, context: ContextTypes.DEFAULT_
             )
             await context.bot.send_message(
                 chat_id=config.ADMIN_CHAT_ID,
-                text=admin_message,
+                text=admin_header,
                 parse_mode='Markdown'
             )
         
         # Confirm to user
         await message.reply_text(
             "✅ **تم إرسال رسالتك للإدارة**\n"
-            "سيتم الرد عليك في أقرب وقت.\n\n"
-            "✅ **Message sent to administration**\n"
+            "سيتم الرد عليك قريباً.\n\n"
+            "✅ **Message sent successfully**\n"
             "You will receive a response soon.",
             parse_mode='Markdown',
             reply_markup=back_to_main_keyboard()
         )
         
-        logger.info(f"✅ Support message from user {user.id} forwarded to admin")
+        logger.info(f"✅ Support message forwarded from user {user.id}")
+        
+        # Clear flag
+        context.user_data['awaiting_support_message'] = False
+        return True  # Message was handled
         
     except Exception as e:
-        logger.error(f"Failed to forward support message: {e}")
+        logger.error(f"Error forwarding support message: {e}")
         await message.reply_text(
-            "❌ حدث خطأ في إرسال الرسالة. يرجى المحاولة لاحقاً.\n"
-            "❌ Error sending message. Please try again later.",
+            "❌ حدث خطأ. يرجى المحاولة لاحقاً.\n"
+            "❌ Error occurred. Please try again later.",
             reply_markup=back_to_main_keyboard()
         )
-    
-    # Clear state
-    context.user_data.pop('awaiting_support_message', None)
-    return ConversationHandler.END
-
-
-async def cancel_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Cancel support message conversation
-    """
-    context.user_data.pop('awaiting_support_message', None)
-    
-    await update.message.reply_text(
-        "❌ **تم إلغاء الإرسال**\n"
-        "❌ **Cancelled**",
-        parse_mode='Markdown',
-        reply_markup=back_to_main_keyboard()
-    )
-    
-    return ConversationHandler.END
+        context.user_data['awaiting_support_message'] = False
+        return True

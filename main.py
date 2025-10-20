@@ -37,7 +37,7 @@ from handlers import (
     admin_pending_registrations,
 )
 from handlers.course_handlers import handle_legal_name_during_registration
-from handlers.support_handlers import receive_support_message, contact_admin_command, cancel_support, AWAITING_SUPPORT_MESSAGE
+from handlers.support_handlers import contact_admin_callback, contact_admin_command, handle_support_message
 from handlers.menu_handlers import contact_admin_callback
 from database import crud, get_db, init_db
 from utils.helpers import handle_error
@@ -483,24 +483,27 @@ def main():
     # ==========================
     # ADMIN SUPPORT HANDLERS
     # ==========================
+    application.add_handler(CallbackQueryHandler(contact_admin_callback, pattern="^contact_admin$"))
+
+    # Add command
     application.add_handler(CommandHandler("contact", contact_admin_command))
 
-    # Add conversation handler for support messages
-    support_conv_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("contact", contact_admin_command),
-            CallbackQueryHandler(contact_admin_callback, pattern="^contact_admin$")
-        ],
-        states={
-            AWAITING_SUPPORT_MESSAGE: [
-                MessageHandler(filters.TEXT | filters.PHOTO | filters.Document.ALL, receive_support_message)
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_support)],
-        allow_reentry=True
-    )
+    # IMPORTANT: Add this BEFORE your other message handlers
+    # This checks if user is in support mode first
+    async def support_message_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Check and handle support messages first"""
+        if context.user_data.get('awaiting_support_message'):
+            await handle_support_message(update, context)
+            return  # Stop processing other handlers
 
-    application.add_handler(support_conv_handler)
+    # Add this handler with high priority (add it early in your handler list)
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT | filters.PHOTO | filters.Document.ALL | filters.VOICE, 
+            support_message_filter
+        ),
+        group=-1  # High priority - runs before other message handlers
+    )
     # ==========================
     # FILE/IMAGE HANDLERS
     # ==========================
