@@ -159,7 +159,7 @@ async def link_group_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def send_course_invite_link(update: Update, context: ContextTypes.DEFAULT_TYPE, telegram_user_id: int, course_id: int) -> bool:
     """
     Generate and send FRESH invite link to verified student
-    Always creates a new single-use invite link for security and reliability
+    Always creates a new invite link for security and reliability
     
     Returns True if successful, False otherwise
     """
@@ -183,12 +183,11 @@ async def send_course_invite_link(update: Update, context: ContextTypes.DEFAULT_
         
         # Case 2: Group exists - ALWAYS generate fresh invite link
         try:
-            # Generate fresh single-use invite link with join request
+            # Generate fresh invite link with join request (no member limit)
             logger.info(f"🔄 Generating fresh invite link for user {telegram_user_id} to course {course_id}")
             
             invite_link = await context.bot.create_chat_invite_link(
                 chat_id=group_id,
-                member_limit=1,  # Single-use link
                 creates_join_request=True,  # Requires join request (will be auto-approved)
                 name=f"Student {telegram_user_id} - {course.course_name[:20]}"  # Identifier for admin
             )
@@ -199,7 +198,7 @@ async def send_course_invite_link(update: Update, context: ContextTypes.DEFAULT_
                 f"🎉 مبروك! تم قبول تسجيلك في دورة **{course.course_name}**\n\n"
                 f"📱 انضم إلى مجموعة الدورة:\n"
                 f"🔗 {invite_link.invite_link}\n\n"
-                f"✅ هذا رابط خاص بك - اضغط عليه وأرسل طلب انضمام\n"
+                f"✅ اضغط على الرابط وأرسل طلب انضمام\n"
                 f"سيتم قبولك تلقائياً خلال ثوانٍ!",
                 parse_mode='Markdown'
             )
