@@ -490,3 +490,31 @@ Please send your message now and it will be forwarded to administration.
     
     # Set state
     context.user_data['awaiting_support_message'] = True
+
+async def contact_admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle "📞 التواصل مع الإدارة" button press"""
+    user = update.effective_user
+    
+    message = """
+📞 **التواصل مع الإدارة / Contact Admin**
+
+يمكنك إرسال رسالتك الآن وسيتم إيصالها للإدارة.
+
+Please send your message now and it will be forwarded to administration.
+
+💡 يمكنك إرسال:
+- نص / Text
+- صور / Images  
+- مستندات / Documents
+
+⬇️ أرسل رسالتك الآن
+⬇️ Send your message now
+"""
+    
+    await update.message.reply_text(
+        message,
+        parse_mode='Markdown'
+    )
+    
+    context.user_data['awaiting_support_message'] = True
+    logger.info(f"User {user.id} clicked contact admin button")

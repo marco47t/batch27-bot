@@ -38,7 +38,7 @@ from handlers import (
 )
 from handlers.course_handlers import handle_legal_name_during_registration
 from handlers.support_handlers import contact_admin_callback, contact_admin_command, handle_support_message
-from handlers.menu_handlers import contact_admin_callback
+from handlers.menu_handlers import contact_admin_callback, contact_admin_text_handler
 from database import crud, get_db, init_db
 from utils.helpers import handle_error
 import config
@@ -483,6 +483,10 @@ def main():
     # ==========================
     # ADMIN SUPPORT HANDLERS
     # ==========================
+    application.add_handler(
+        MessageHandler(filters.Regex("^📞 التواصل مع الإدارة$"), contact_admin_text_handler)
+    )
+    
     application.add_handler(CallbackQueryHandler(contact_admin_callback, pattern="^contact_admin$"))
 
     # Add command

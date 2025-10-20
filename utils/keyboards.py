@@ -14,7 +14,7 @@ def main_menu_reply_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton("1- الدورات المتاحة 📚")],
         [KeyboardButton("2- دوراتي 📋")],
-        [InlineKeyboardButton("📞 التواصل مع الإدارة", callback_data="contact_admin")],  # NEW
+        [KeyboardButton("📞 التواصل مع الإدارة")],  # FIX: Use KeyboardButton, not InlineKeyboardButton
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
