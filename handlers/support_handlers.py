@@ -90,7 +90,9 @@ async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_T
     with get_db() as session:
         db_user = crud.get_user_by_telegram_id(session, user.id)
         if db_user:
-            user_display = f"{db_user.full_name} (ID: {db_user.user_id})"
+            # Use the correct attribute name from your User model
+            user_name = getattr(db_user, 'full_name', None) or getattr(db_user, 'name', None) or f"{user.first_name} {user.last_name or ''}"
+            user_display = f"{user_name} (ID: {db_user.user_id})"
         else:
             user_display = f"{user.first_name} {user.last_name or ''}"
     
