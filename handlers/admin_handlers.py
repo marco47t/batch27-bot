@@ -195,7 +195,9 @@ async def admin_approve_callback(update: Update, context: ContextTypes.DEFAULT_T
             course_names=course_names,
             group_links=group_links
         )
-
+        from handlers.group_registration import send_course_invite_link
+        await send_course_invite_link(update, context, user_chat_id, enrollment.course_id)
+        
     # Edit the original admin message (notification or panel) to show it's completed
     final_text = f"✅ Transaction {transaction_id} approved by {admin_user.first_name}."
     try:
@@ -428,6 +430,12 @@ async def admin_approve_failed_callback(update: Update, context: ContextTypes.DE
             course_names=course_names,
             group_links=group_links
         )
+        from handlers.group_registration import send_course_invite_link
+        with get_db() as session:
+            for enrollment_id in enrollment_ids:
+                enrollment = crud.get_enrollment_by_id(session, enrollment_id)
+                if enrollment:
+                    await send_course_invite_link(update, context, user_chat_id, enrollment.course_id)
     
     # Update admin message
     final_text = f"✅ Enrollments {enrollment_ids_str} approved by {admin_user.first_name}.\n\n✉️ User {telegram_user_id} has been notified."
