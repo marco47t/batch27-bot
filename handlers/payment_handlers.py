@@ -159,18 +159,19 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
 
     # ===== IMAGE FORENSICS ANALYSIS =====
     from services.image_forensics import analyze_image_metadata
-    from services.ela_detector import detect_tampering
+    from services.ela_detector import perform_ela
 
     # Combine metadata and ELA analysis
     metadata_analysis = analyze_image_metadata(temp_path)
-    ela_analysis = detect_tampering(temp_path)
+    ela_analysis = perform_ela(temp_path)
 
     # Combine results
     image_forensics_result = {
         "is_forged": ela_analysis.get("is_suspicious", False) or metadata_analysis.get("risk_level") == "HIGH",
-        "ela_score": ela_analysis.get("suspicious_percentage", 0),
+        "ela_score": ela_analysis.get("risk_score", 0) * 20,  # Convert 0-5 score to 0-100 percentage
         "metadata_risk": metadata_analysis.get("risk_level", "LOW"),
-        "metadata_flags": metadata_analysis.get("suspicious_flags", [])
+        "metadata_flags": metadata_analysis.get("suspicious_flags", []),
+        "ela_reasons": ela_analysis.get("reasons", [])
     }
     logger.info(f"Image forensics: is_forged={image_forensics_result.get('is_forged')}, ela_score={image_forensics_result.get('ela_score', 0)}")
 
