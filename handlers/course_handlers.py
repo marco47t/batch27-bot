@@ -384,11 +384,11 @@ async def view_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def confirm_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Confirm cart and create pending enrollments"""
+    """Confirm cart and check legal name before proceeding to payment"""
     query = update.callback_query
     await query.answer()
-    telegram_user_id = query.from_user.id
     
+    telegram_user_id = query.from_user.id
     logger.info(f"User {telegram_user_id} confirming cart")
     
     with get_db() as session:
@@ -401,10 +401,33 @@ async def confirm_cart_callback(update: Update, context: ContextTypes.DEFAULT_TY
             last_name=query.from_user.last_name
         )
         session.flush()
-        
         internal_user_id = db_user.user_id
         
-        # Get cart using internal ID
+        # Check if user has legal name registered
+        if not crud.has_legal_name(session, internal_user_id):
+            logger.info(f"User {telegram_user_id} needs to provide legal name first")
+            
+            await query.edit_message_text(
+                "📝 *تسجيل الاسم القانوني مطلوب | Legal Name Required*\n\n"
+                "قبل إتمام التسجيل، نحتاج إلى اسمك الرباعي الكامل كما هو مكتوب في المستندات الرسمية.\n"
+                "Before completing registration, we need your full four-part name as written on official documents.\n\n"
+                "⚠️ *مهم جداً | Very Important:*\n"
+                "• يجب أن يكون الاسم باللغة الإنجليزية\n"
+                "• Must be in English\n"
+                "• الاسم الرباعي: (اسمك - اسم والدك - اسم جدك - اسم جد والدك)\n"
+                "• Four parts: (Your name - Father - Grandfather - Great-grandfather)\n\n"
+                "🔹 *الخطوة 1/4:* أدخل اسمك الأول\n"
+                "🔹 *Step 1/4:* Enter your first name",
+                parse_mode='Markdown'
+            )
+            
+            # Set context for legal name collection during registration
+            context.user_data['collecting_legal_name_for_registration'] = True
+            context.user_data['registration_internal_user_id'] = internal_user_id
+            
+            return  # Stop here, wait for legal name input
+        
+        # User has legal name, proceed with normal cart confirmation
         cart_items = crud.get_user_cart(session, internal_user_id)
         
         if not cart_items:
@@ -426,17 +449,18 @@ async def confirm_cart_callback(update: Update, context: ContextTypes.DEFAULT_TY
             logger.info(f"Created enrollment {enrollment.enrollment_id} for user {telegram_user_id}, course {course.course_id}")
         
         session.commit()
-    
-    # Store in context for payment flow
-    context.user_data["cart_total_for_payment"] = total
-    context.user_data["pending_enrollment_ids_for_payment"] = enrollment_ids
-    
-    logger.info(f"User {telegram_user_id} cart confirmed: {len(enrollment_ids)} enrollments, total={total}")
-    log_user_action(telegram_user_id, "cart_confirmed", f"total={total}, enrollments={enrollment_ids}")
-    
-    # Import here to avoid circular import
-    from handlers.payment_handlers import proceed_to_payment_callback
-    await proceed_to_payment_callback(update, context)
+        
+        # Store in context for payment flow
+        context.user_data['cart_total_for_payment'] = total
+        context.user_data['pending_enrollment_ids_for_payment'] = enrollment_ids
+        
+        logger.info(f"User {telegram_user_id} cart confirmed: {len(enrollment_ids)} enrollments, total={total}")
+        log_user_action(telegram_user_id, "cart_confirmed", f"total={total}, enrollments={enrollment_ids}")
+        
+        # Import here to avoid circular import
+        from handlers.payment_handlers import proceed_to_payment_callback
+        await proceed_to_payment_callback(update, context)
+
 
 
 async def clear_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -471,3 +495,143 @@ async def clear_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         "🗑️ تم تفريغ السلة",
         reply_markup=courses_menu_keyboard()
     )
+
+async def handle_legal_name_during_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle legal name collection during course registration"""
+    if not context.user_data.get('collecting_legal_name_for_registration'):
+        return  # Not in legal name collection mode
+    
+    user = update.effective_user
+    text = update.message.text.strip()
+    
+    # Validate English only
+    if not text.replace(' ', '').isalpha() or not text.isascii():
+        await update.message.reply_text(
+            "❌ يجب أن يكون الاسم باللغة الإنجليزية فقط\n"
+            "❌ Name must be in English only\n\n"
+            "Please enter the name again.",
+            parse_mode='Markdown'
+        )
+        return
+    
+    # Determine which step we're on
+    if 'legal_name_first' not in context.user_data:
+        # Step 1: First name
+        context.user_data['legal_name_first'] = text
+        await update.message.reply_text(
+            f"✅ تم حفظ: {text}\n\n"
+            "🔹 *الخطوة 2/4:* أدخل اسم والدك\n"
+            "🔹 *Step 2/4:* Enter your father's name",
+            parse_mode='Markdown'
+        )
+    
+    elif 'legal_name_father' not in context.user_data:
+        # Step 2: Father's name
+        context.user_data['legal_name_father'] = text
+        await update.message.reply_text(
+            f"✅ تم حفظ: {text}\n\n"
+            "🔹 *الخطوة 3/4:* أدخل اسم جدك\n"
+            "🔹 *Step 3/4:* Enter your grandfather's name",
+            parse_mode='Markdown'
+        )
+    
+    elif 'legal_name_grandfather' not in context.user_data:
+        # Step 3: Grandfather's name
+        context.user_data['legal_name_grandfather'] = text
+        await update.message.reply_text(
+            f"✅ تم حفظ: {text}\n\n"
+            "🔹 *الخطوة 4/4:* أدخل اسم جد والدك\n"
+            "🔹 *Step 4/4:* Enter your great-grandfather's name",
+            parse_mode='Markdown'
+        )
+    
+    else:
+        # Step 4: Great-grandfather's name - Save and proceed
+        with get_db() as session:
+            internal_user_id = context.user_data.get('registration_internal_user_id')
+            
+            if not internal_user_id:
+                await update.message.reply_text(
+                    "❌ حدث خطأ. يرجى المحاولة مرة أخرى.\n"
+                    "❌ An error occurred. Please try again.",
+                    reply_markup=back_to_main_keyboard()
+                )
+                context.user_data.clear()
+                return
+            
+            # Save legal name
+            success = crud.update_user_legal_name(
+                session,
+                internal_user_id,
+                context.user_data['legal_name_first'],
+                context.user_data['legal_name_father'],
+                context.user_data['legal_name_grandfather'],
+                text
+            )
+            
+            if success:
+                full_name = (
+                    f"{context.user_data['legal_name_first']} "
+                    f"{context.user_data['legal_name_father']} "
+                    f"{context.user_data['legal_name_grandfather']} "
+                    f"{text}"
+                )
+                
+                await update.message.reply_text(
+                    "✅ *تم حفظ اسمك القانوني بنجاح!*\n"
+                    "✅ *Legal name saved successfully!*\n\n"
+                    f"📋 *الاسم الكامل | Full Name:*\n{full_name}\n\n"
+                    "جاري المتابعة إلى الدفع...\n"
+                    "Proceeding to payment...",
+                    parse_mode='Markdown'
+                )
+                
+                # Clear legal name collection flags
+                context.user_data.pop('collecting_legal_name_for_registration', None)
+                context.user_data.pop('registration_internal_user_id', None)
+                context.user_data.pop('legal_name_first', None)
+                context.user_data.pop('legal_name_father', None)
+                context.user_data.pop('legal_name_grandfather', None)
+                
+                # Now proceed with cart confirmation
+                cart_items = crud.get_user_cart(session, internal_user_id)
+                
+                if not cart_items:
+                    await update.message.reply_text(
+                        "❌ عربة التسوق فارغة\n❌ Cart is empty",
+                        reply_markup=back_to_main_keyboard()
+                    )
+                    return
+                
+                courses = [item.course for item in cart_items]
+                total = sum(course.price for course in courses)
+                
+                # Create pending enrollments
+                enrollment_ids = []
+                for course in courses:
+                    enrollment = crud.create_enrollment(session, internal_user_id, course.course_id, course.price)
+                    enrollment_ids.append(enrollment.enrollment_id)
+                
+                session.commit()
+                
+                # Store in context for payment
+                context.user_data['cart_total_for_payment'] = total
+                context.user_data['pending_enrollment_ids_for_payment'] = enrollment_ids
+                context.user_data['awaiting_receipt_upload'] = True
+                
+                # Send payment instructions
+                from utils.messages import payment_instructions_message
+                from utils.keyboards import payment_upload_keyboard
+                
+                await update.message.reply_text(
+                    payment_instructions_message(total),
+                    reply_markup=payment_upload_keyboard(),
+                    parse_mode='Markdown'
+                )
+            else:
+                await update.message.reply_text(
+                    "❌ حدث خطأ أثناء حفظ الاسم. يرجى المحاولة مرة أخرى.\n"
+                    "❌ Error saving name. Please try again.",
+                    reply_markup=back_to_main_keyboard()
+                )
+                context.user_data.clear()

@@ -34,8 +34,9 @@ from handlers import (
     student_preferences,
     student_reviews,
     admin_reviews,
-    admin_pending_registrations
+    admin_pending_registrations,
 )
+from handlers.course_handlers import handle_legal_name_during_registration
 
 from database import crud, get_db, init_db
 from utils.helpers import handle_error
@@ -611,6 +612,12 @@ def main():
         fallbacks=[CommandHandler('cancel', student_reviews.cancel_review)],
     )
     application.add_handler(review_conv_handler)
+
+
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND, 
+        handle_legal_name_during_registration
+    ), group=0)  # Higher priority
 
     # Admin review viewing
     application.add_handler(CommandHandler('viewreviews', admin_reviews.view_reviews_command))
