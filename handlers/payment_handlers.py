@@ -136,23 +136,25 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
         "similarity_score": 0
     }
 
-    if transaction_id:
-        is_duplicate_tx = crud.check_duplicate_transaction_id(session, transaction_id)
-        if is_duplicate_tx:
-            duplicate_check_result["transaction_id_duplicate"] = True
-            duplicate_check_result["duplicate_transaction_id"] = transaction_id
-            logger.warning(f"⚠️ Duplicate transaction ID detected: {transaction_id}")
+    # Open session for duplicate checks
+    with get_db() as dup_session:
+        if transaction_id:
+            is_duplicate_tx = crud.check_duplicate_transaction_id(dup_session, transaction_id)
+            if is_duplicate_tx:
+                duplicate_check_result["transaction_id_duplicate"] = True
+                duplicate_check_result["duplicate_transaction_id"] = transaction_id
+                logger.warning(f"⚠️ Duplicate transaction ID detected: {transaction_id}")
+            else:
+                logger.info(f"✅ Transaction ID is unique: {transaction_id}")
         else:
-            logger.info(f"✅ Transaction ID is unique: {transaction_id}")
-    else:
-        logger.warning(f"⚠️ No transaction ID extracted from receipt")
+            logger.warning(f"⚠️ No transaction ID extracted from receipt")
 
     # ===== IMAGE DUPLICATE CHECK =====
     from services.duplicate_detector import check_duplicate_submission
     duplicate_image_check = check_duplicate_submission(internal_user_id, temp_path)
 
     duplicate_check_result["is_duplicate"] = duplicate_image_check.get("is_duplicate", False)
-    duplicate_check_result["similarity_score"] = duplicate_image_check.get("similarity_score", 0)
+    duplicate_check_result["similarity_score"] = duplicate_image_check.get("similarity_percentage", 0)  # FIX: correct field name
 
     if duplicate_check_result["is_duplicate"]:
         logger.warning(f"⚠️ Duplicate image detected: similarity={duplicate_check_result['similarity_score']}%")
@@ -161,14 +163,12 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
     from services.image_forensics import analyze_image_metadata
     from services.ela_detector import perform_ela
 
-    # Combine metadata and ELA analysis
     metadata_analysis = analyze_image_metadata(temp_path)
     ela_analysis = perform_ela(temp_path)
 
-    # Combine results
     image_forensics_result = {
         "is_forged": ela_analysis.get("is_suspicious", False) or metadata_analysis.get("risk_level") == "HIGH",
-        "ela_score": ela_analysis.get("risk_score", 0) * 20,  # Convert 0-5 score to 0-100 percentage
+        "ela_score": ela_analysis.get("risk_score", 0) * 20,
         "metadata_risk": metadata_analysis.get("risk_level", "LOW"),
         "metadata_flags": metadata_analysis.get("suspicious_flags", []),
         "ela_reasons": ela_analysis.get("reasons", [])
@@ -239,9 +239,26 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
         
         enrollment_ids_to_update = [e.enrollment_id for e in enrollments_to_update]
         enrollment_ids_str = ', '.join(map(str, enrollment_ids_to_update))
+        # ===== STORE RECEIPT METADATA IN DATABASE =====
+        logger.info(f"💾 Storing receipt metadata for enrollments: {enrollment_ids_str}")
         
+        for enrollment_id in enrollment_ids_to_update:
+            metadata_stored = crud.update_enrollment_receipt_metadata(
+                session,
+                enrollment_id=enrollment_id,
+                transaction_id=gemini_result.get("transaction_id"),
+                transfer_date=gemini_result.get("transfer_datetime"),
+                sender_name=gemini_result.get("sender_name") or gemini_result.get("recipient_name")
+            )
+            if metadata_stored:
+                logger.info(f"✅ Metadata stored for enrollment {enrollment_id}")
+            else:
+                logger.warning(f"⚠️ Failed to store metadata for enrollment {enrollment_id}")
+        
+        session.commit()
+        logger.info(f"💾 Receipt metadata committed to database")
         # ==================== FRAUD ACTION: REJECT ====================
-        if fraud_analysis["action"] == "REJECT":
+        if fraud_analysis["recommendation"] == "REJECT":
             logger.warning(f"Receipt REJECTED for user {telegram_user_id}: Fraud detected with score {fraud_analysis['fraud_score']}")
             
             # Update transaction as rejected with fraud data
@@ -415,7 +432,7 @@ ID: <code>{telegram_user_id}</code>
             return
         
         # ==================== FRAUD ACTION: MANUAL REVIEW ====================
-        elif fraud_analysis["action"] == "MANUAL_REVIEW":
+        elif fraud_analysis["recommendation"] == "MANUAL_REVIEW":
             logger.warning(f"Receipt flagged for MANUAL REVIEW for user {telegram_user_id}: Score {fraud_analysis['fraud_score']}")
             
             # Update as pending review
