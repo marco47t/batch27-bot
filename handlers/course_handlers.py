@@ -626,7 +626,7 @@ async def handle_legal_name_during_registration(update: Update, context: Context
                 context.user_data['cart_total_for_payment'] = total
                 context.user_data['pending_enrollment_ids_for_payment'] = enrollment_ids
                 context.user_data['awaiting_receipt_upload'] = True
-                
+                context.user_data['expected_amount_for_gemini'] = total
                 # Send payment instructions
                 from utils.messages import payment_instructions_message
                 from utils.keyboards import payment_upload_keyboard
