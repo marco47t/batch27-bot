@@ -148,8 +148,8 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
         logger.warning(f"⚠️ No transaction ID extracted from receipt")
 
     # ===== IMAGE DUPLICATE CHECK =====
-    from services.duplicate_detector import check_duplicate_receipt_async
-    duplicate_image_check = await check_duplicate_receipt_async(temp_path, session, internal_user_id)
+    from services.duplicate_detector import check_duplicate_submission
+    duplicate_image_check = check_duplicate_submission(internal_user_id, temp_path)
 
     duplicate_check_result["is_duplicate"] = duplicate_image_check.get("is_duplicate", False)
     duplicate_check_result["similarity_score"] = duplicate_image_check.get("similarity_score", 0)
