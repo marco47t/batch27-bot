@@ -832,3 +832,23 @@ def update_enrollment_receipt_metadata(
         session.rollback()
         logger.error(f"Error updating receipt metadata for enrollment {enrollment_id}: {e}")
         return False
+
+def update_course_group_link(session: Session, course_id: int, group_link: str) -> bool:
+    """
+    Update course group link (auto-fetched from Telegram)
+    """
+    try:
+        course = session.query(Course).filter(Course.course_id == course_id).first()
+        if not course:
+            logger.warning(f"Course {course_id} not found for group link update")
+            return False
+        
+        course.telegram_group_link = group_link
+        session.commit()
+        logger.info(f"✅ Updated group link for course {course_id}")
+        return True
+    
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Failed to update group link for course {course_id}: {e}")
+        return False

@@ -806,6 +806,9 @@ ID: {telegram_user_id}
             course_data_list = []
             group_links_list = []
             
+            # Import the group invitation function
+            from handlers.group_registration import send_course_invite_link
+            
             for e in enrollments_to_update:
                 if e.payment_status == PaymentStatus.VERIFIED:
                     course = e.course
@@ -815,9 +818,13 @@ ID: {telegram_user_id}
                             'course_id': course.course_id,
                             'course_name': course.course_name
                         })
+                        
+                        # Send course group invite link (auto-fetches if missing)
+                        await send_course_invite_link(update, context, telegram_user_id, course.course_id)
+                        
+                        # Also keep for backwards compatibility in success message
                         if course.telegram_group_link:
                             group_links_list.append(course.telegram_group_link)
-            
             if not resubmission_enrollment_id:
                 crud.clear_user_cart(session, internal_user_id)
                 logger.info(f"Cleared cart for user {telegram_user_id}")

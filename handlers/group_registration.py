@@ -154,3 +154,81 @@ async def link_group_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                 parse_mode='Markdown'
             )
 
+
+
+async def send_course_invite_link(update: Update, context: ContextTypes.DEFAULT_TYPE, telegram_user_id: int, course_id: int) -> bool:
+    """
+    Send invite link to verified student
+    Tries to fetch link from DB, or creates a new one if missing
+    
+    Returns True if successful, False otherwise
+    """
+    with get_db() as session:
+        course = crud.get_course_by_id(session, course_id)
+        if not course:
+            logger.error(f"Course {course_id} not found")
+            return False
+        
+        group_id = course.telegram_group_id
+        group_link = course.telegram_group_link
+        
+        # Case 1: No group configured
+        if not group_id and not group_link:
+            logger.warning(f"Course {course_id} has no group configured")
+            await context.bot.send_message(
+                telegram_user_id,
+                f"⚠️ لا توجد مجموعة مسجلة لدورة {course.course_name} حالياً.\n"
+                f"سيتم إضافتك عند توفر الرابط."
+            )
+            return False
+        
+        # Case 2: Use existing link
+        if group_link:
+            await context.bot.send_message(
+                telegram_user_id,
+                f"🎉 مبروك! تم قبول تسجيلك في دورة **{course.course_name}**\n\n"
+                f"📱 انضم إلى مجموعة الدورة:\n"
+                f"🔗 {group_link}\n\n"
+                f"💡 انقر على الرابط وأرسل طلب انضمام - سيتم قبولك تلقائياً",
+                parse_mode='Markdown'
+            )
+            logger.info(f"✅ Sent group link to user {telegram_user_id} for course {course_id}")
+            return True
+        
+        # Case 3: No link but has group_id - try to fetch/create link
+        if group_id:
+            try:
+                # Try to create a new invite link
+                invite_link = await context.bot.create_chat_invite_link(
+                    chat_id=group_id,
+                    creates_join_request=True,
+                    name=f"{course.course_name} - Student Access"
+                )
+                
+                # Store the link
+                course.telegram_group_link = invite_link.invite_link
+                session.commit()
+                
+                # Send to user
+                await context.bot.send_message(
+                    telegram_user_id,
+                    f"🎉 مبروك! تم قبول تسجيلك في دورة **{course.course_name}**\n\n"
+                    f"📱 انضم إلى مجموعة الدورة:\n"
+                    f"🔗 {invite_link.invite_link}\n\n"
+                    f"💡 انقر على الرابط وأرسل طلب انضمام - سيتم قبولك تلقائياً",
+                    parse_mode='Markdown'
+                )
+                logger.info(f"✅ Created and sent new invite link for course {course_id}")
+                return True
+                
+            except Exception as e:
+                logger.error(f"Failed to create invite link for group {group_id}: {e}")
+                await context.bot.send_message(
+                    telegram_user_id,
+                    f"⚠️ تم قبول تسجيلك في دورة {course.course_name}\n"
+                    f"لكن حدث خطأ في إنشاء رابط المجموعة.\n"
+                    f"سيتم إرسال الرابط لك قريباً."
+                )
+                return False
+        
+        return False
