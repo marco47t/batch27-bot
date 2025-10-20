@@ -1,7 +1,9 @@
 # services/gemini_service.py
+
 """
-Google Gemini Vision AI service for receipt validation
+Google Gemini Vision AI service for receipt validation with metadata extraction
 """
+
 import json
 import os
 from typing import Dict, Any
@@ -20,9 +22,15 @@ genai.configure(api_key=config.GEMINI_API_KEY)
 # Initialize the model
 model = genai.GenerativeModel('gemini-2.5-flash')
 
-async def validate_receipt_with_gemini_ai(image_path: str, expected_amount: float, expected_account: str, max_retries: int = 1) -> Dict[str, Any]:
+
+async def validate_receipt_with_gemini_ai(
+    image_path: str, 
+    expected_amount: float, 
+    expected_account: str, 
+    max_retries: int = 1
+) -> Dict[str, Any]:
     """
-    Validate receipt using Google Gemini Vision AI with retry logic and STRICT account validation
+    Validate receipt using Google Gemini Vision AI with enhanced metadata extraction
     
     Args:
         image_path: Path to the receipt image
@@ -31,13 +39,12 @@ async def validate_receipt_with_gemini_ai(image_path: str, expected_amount: floa
         max_retries: Maximum number of retry attempts (default: 1)
     
     Returns:
-        Dictionary with validation results
+        Dictionary with validation results including metadata for duplicate detection
     """
-    
     # Get current date for validation
     current_date = datetime.now()
     current_date_str = current_date.strftime("%Y-%m-%d")
-    max_acceptable_date = (current_date + timedelta(days=1)).strftime("%Y-%m-%d")  # Allow 1 day tolerance for timezone
+    max_acceptable_date = (current_date + timedelta(days=1)).strftime("%Y-%m-%d")
     
     for attempt in range(max_retries):
         try:
@@ -46,7 +53,7 @@ async def validate_receipt_with_gemini_ai(image_path: str, expected_amount: floa
             # Open and prepare the image
             image = Image.open(image_path)
             
-            # Create the prompt for receipt validation with STRICT account check and date validation
+            # Enhanced prompt with metadata extraction
             prompt = f"""
 Analyze this payment receipt image and extract the following information in JSON format:
 
@@ -55,6 +62,8 @@ Analyze this payment receipt image and extract the following information in JSON
   "amount": extracted payment amount as a number,
   "date": "payment date in YYYY-MM-DD format if visible",
   "transaction_id": "transaction/reference number if visible",
+  "sender_name": "sender/payer name if visible",
+  "sender_account": "sender account number if visible",
   "currency": "detected currency (likely SDG - Sudanese Pound)",
   "is_valid": true or false,
   "validation_notes": "brief explanation (max 80 words)",
@@ -72,13 +81,19 @@ Analyze this payment receipt image and extract the following information in JSON
 
 2. **AMOUNT**: Must be at least {expected_amount:.2f} SDG (allow 2% tolerance = {expected_amount * 0.98:.2f} SDG minimum)
 
-3. **DATE VALIDATION**: 
+3. **DATE VALIDATION**:
    - Current date: {current_date_str}
    - Receipt date CANNOT be in the future (after {max_acceptable_date})
    - If date is future or invalid, add to tampering_indicators and set is_valid FALSE
    - Very old dates (>6 months) should also be flagged in tampering_indicators
 
-4. **VISUAL AUTHENTICITY CHECKS** (add to tampering_indicators if found):
+4. **METADATA EXTRACTION** (CRITICAL for duplicate detection):
+   - **transaction_id**: Extract the unique transaction/reference number (usually at top)
+   - **sender_name**: Extract the full name of the person who sent the payment
+   - **sender_account**: Extract the sender's account number if visible
+   - These fields are MANDATORY - extract even if validation fails
+
+5. **VISUAL AUTHENTICITY CHECKS** (add to tampering_indicators if found):
    - Text appears digitally added or overlaid
    - Unnatural fonts, sizes, or alignments
    - Inconsistent lighting or shadows around text
@@ -87,7 +102,7 @@ Analyze this payment receipt image and extract the following information in JSON
    - White/colored boxes behind text
    - Signs of copy-paste or cloning
 
-5. **LOGICAL CONSISTENCY**:
+6. **LOGICAL CONSISTENCY**:
    - Do line items add up correctly?
    - Are tax calculations correct?
    - Does format look authentic for this bank?
@@ -122,7 +137,6 @@ Return ONLY the JSON object, no other text.
                 response_text = response_text[7:].strip()
             elif response_text.startswith("```"):
                 response_text = response_text[3:].strip()
-            
             if response_text.endswith("```"):
                 response_text = response_text[:-3].strip()
             
@@ -141,10 +155,13 @@ Return ONLY the JSON object, no other text.
             amount = data.get("amount", 0)
             validation_notes = data.get("validation_notes", "")
             extracted_date = data.get("date")
+            transaction_id = data.get("transaction_id", "")
+            sender_name = data.get("sender_name", "")
+            sender_account = data.get("sender_account", "")
             tampering_indicators = data.get("tampering_indicators", [])
             authenticity_score = data.get("authenticity_score", 100)
             
-            # ADDITIONAL STRICT CHECK on our side - Account Number
+            # ADDITIONAL STRICT CHECK - Account Number
             if account_number and expected_account:
                 # Normalize both (remove spaces, dashes, etc)
                 normalized_extracted = ''.join(filter(str.isdigit, str(account_number)))
@@ -156,20 +173,21 @@ Return ONLY the JSON object, no other text.
                     validation_notes = f"رقم الحساب غير صحيح. المطلوب: {expected_account}, المستلم: {account_number}"
             
             # ADDITIONAL STRICT CHECK - Date Validation
+            receipt_datetime = None
             if extracted_date:
                 try:
                     # Try to parse the date
-                    receipt_date = datetime.strptime(extracted_date, "%Y-%m-%d")
+                    receipt_datetime = datetime.strptime(extracted_date, "%Y-%m-%d")
                     
                     # Check if date is in the future
-                    if receipt_date > current_date + timedelta(days=1):
+                    if receipt_datetime > current_date + timedelta(days=1):
                         logger.warning(f"Future date detected: {extracted_date} (current: {current_date_str})")
                         is_valid = False
                         tampering_indicators.append(f"Future date detected: {extracted_date}")
                         validation_notes = f"التاريخ في المستقبل! التاريخ: {extracted_date}, اليوم: {current_date_str}"
                     
                     # Check if date is very old (>6 months)
-                    elif receipt_date < current_date - timedelta(days=180):
+                    elif receipt_datetime < current_date - timedelta(days=180):
                         logger.warning(f"Very old date detected: {extracted_date}")
                         tampering_indicators.append(f"Receipt date is over 6 months old: {extracted_date}")
                         
@@ -177,13 +195,16 @@ Return ONLY the JSON object, no other text.
                     logger.warning(f"Invalid date format: {extracted_date}")
                     tampering_indicators.append(f"Invalid date format: {extracted_date}")
             
-            # Build result
+            # Build result with enhanced metadata
             result = {
                 "is_valid": bool(is_valid),
                 "account_number": str(account_number) if account_number else None,
                 "amount": float(amount) if amount else None,
                 "date": extracted_date,
-                "transaction_id": data.get("transaction_id"),
+                "transfer_datetime": receipt_datetime,  # ✅ NEW: parsed datetime object
+                "transaction_id": transaction_id if transaction_id else None,  # ✅ NEW
+                "sender_name": sender_name if sender_name else None,  # ✅ NEW
+                "sender_account": sender_account if sender_account else None,  # ✅ NEW
                 "currency": data.get("currency", "SDG"),
                 "reason": validation_notes if not is_valid else "تم التحقق من الدفع بنجاح",
                 "tampering_indicators": tampering_indicators,
@@ -192,6 +213,7 @@ Return ONLY the JSON object, no other text.
             }
             
             logger.info(f"Gemini validation completed successfully on attempt {attempt + 1}")
+            logger.info(f"Extracted metadata - Transaction ID: {transaction_id}, Sender: {sender_name}, Date: {extracted_date}")
             return result
             
         except Exception as e:
@@ -206,7 +228,10 @@ Return ONLY the JSON object, no other text.
                     "account_number": None,
                     "amount": None,
                     "date": None,
+                    "transfer_datetime": None,
                     "transaction_id": None,
+                    "sender_name": None,
+                    "sender_account": None,
                     "currency": "SDG",
                     "reason": f"فشل التحقق التلقائي. يتطلب مراجعة يدوية. خطأ: {str(e)}",
                     "tampering_indicators": [],

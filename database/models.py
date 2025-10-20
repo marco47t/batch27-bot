@@ -92,6 +92,10 @@ class Enrollment(Base):
     receipt_image_path = Column(String(500), nullable=True)
     verification_date = Column(DateTime, nullable=True)
     admin_notes = Column(Text, nullable=True)
+    receipt_transaction_id = Column(String(100), nullable=True)
+    receipt_transfer_date = Column(DateTime, nullable=True)
+    receipt_sender_name = Column(String(255), nullable=True)
+    receipt_submission_date = Column(DateTime, default=datetime.utcnow)
     
     # Relationships
     user = relationship("User", back_populates="enrollments")
