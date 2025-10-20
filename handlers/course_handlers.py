@@ -498,8 +498,10 @@ async def clear_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def handle_legal_name_during_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle legal name collection during course registration"""
+    
+    # Check if we're collecting legal name
     if not context.user_data.get('collecting_legal_name_for_registration'):
-        return  # Not in legal name collection mode
+        return  # Let other handlers process this message
     
     user = update.effective_user
     text = update.message.text.strip()
@@ -509,10 +511,10 @@ async def handle_legal_name_during_registration(update: Update, context: Context
         await update.message.reply_text(
             "❌ يجب أن يكون الاسم باللغة الإنجليزية فقط\n"
             "❌ Name must be in English only\n\n"
-            "Please enter the name again.",
+            "الرجاء إدخال الاسم مرة أخرى.\nPlease enter the name again.",
             parse_mode='Markdown'
         )
-        return
+        return  # Stay in current step
     
     # Determine which step we're on
     if 'legal_name_first' not in context.user_data:
@@ -524,6 +526,7 @@ async def handle_legal_name_during_registration(update: Update, context: Context
             "🔹 *Step 2/4:* Enter your father's name",
             parse_mode='Markdown'
         )
+        return
     
     elif 'legal_name_father' not in context.user_data:
         # Step 2: Father's name
@@ -534,6 +537,7 @@ async def handle_legal_name_during_registration(update: Update, context: Context
             "🔹 *Step 3/4:* Enter your grandfather's name",
             parse_mode='Markdown'
         )
+        return
     
     elif 'legal_name_grandfather' not in context.user_data:
         # Step 3: Grandfather's name
@@ -544,6 +548,7 @@ async def handle_legal_name_during_registration(update: Update, context: Context
             "🔹 *Step 4/4:* Enter your great-grandfather's name",
             parse_mode='Markdown'
         )
+        return
     
     else:
         # Step 4: Great-grandfather's name - Save and proceed
@@ -586,6 +591,8 @@ async def handle_legal_name_during_registration(update: Update, context: Context
                     parse_mode='Markdown'
                 )
                 
+                logger.info(f"Legal name saved for user {internal_user_id}: {full_name}")
+                
                 # Clear legal name collection flags
                 context.user_data.pop('collecting_legal_name_for_registration', None)
                 context.user_data.pop('registration_internal_user_id', None)
@@ -611,6 +618,7 @@ async def handle_legal_name_during_registration(update: Update, context: Context
                 for course in courses:
                     enrollment = crud.create_enrollment(session, internal_user_id, course.course_id, course.price)
                     enrollment_ids.append(enrollment.enrollment_id)
+                    logger.info(f"Created enrollment {enrollment.enrollment_id} for user {internal_user_id}")
                 
                 session.commit()
                 
