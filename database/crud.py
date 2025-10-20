@@ -729,3 +729,21 @@ def get_user_legal_name(session: Session, user_id: int) -> Optional[str]:
     except Exception as e:
         logger.error(f"Error getting legal name for user {user_id}: {e}")
         return None
+
+def has_legal_name(session: Session, user_id: int) -> bool:
+    """
+    Check if user has provided their legal name
+    
+    Returns:
+        bool: True if legal name is set
+    """
+    try:
+        user = session.query(User).filter(User.user_id == user_id).first()
+        if not user:
+            return False
+        
+        return bool(user.legal_name_first)
+        
+    except Exception as e:
+        logger.error(f"Error checking legal name for user {user_id}: {e}")
+        return False
