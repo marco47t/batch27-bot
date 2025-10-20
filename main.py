@@ -487,6 +487,12 @@ def main():
         filters.PHOTO | filters.Document.IMAGE, 
         payment_handlers.receipt_upload_message_handler
     ))
+
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND, 
+        handle_legal_name_during_registration
+    ), group=0)  # Higher priority
+
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.User(config.ADMIN_USER_IDS), 
         admin_handlers.rejection_reason_message_handler
@@ -614,10 +620,6 @@ def main():
     application.add_handler(review_conv_handler)
 
 
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND, 
-        handle_legal_name_during_registration
-    ), group=0)  # Higher priority
 
     # Admin review viewing
     application.add_handler(CommandHandler('viewreviews', admin_reviews.view_reviews_command))
