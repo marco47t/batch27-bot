@@ -1,7 +1,7 @@
 # services/gemini_service.py
 
 """
-Google Gemini Vision AI service for receipt validation with FUZZY matching
+Google Gemini Vision AI service for receipt validation with old receipt detection
 """
 
 import json
@@ -18,8 +18,6 @@ logger = logging.getLogger(__name__)
 
 # Configure Gemini API
 genai.configure(api_key=config.GEMINI_API_KEY)
-
-# Initialize the model
 model = genai.GenerativeModel('gemini-2.5-flash')
 
 
@@ -30,138 +28,136 @@ async def validate_receipt_with_gemini_ai(
     max_retries: int = 1
 ) -> Dict[str, Any]:
     """
-    Validate receipt using Google Gemini Vision AI with FLEXIBLE/FUZZY matching
+    Validate receipt with OLD receipt detection and multilingual field extraction
     
     Args:
         image_path: Path to the receipt image
-        expected_amount: Expected payment amount in SDG
-        expected_account: Expected account number (fuzzy match acceptable)
-        max_retries: Maximum number of retry attempts (default: 1)
+        expected_amount: Expected MINIMUM payment amount in SDG
+        expected_account: Expected account number (fuzzy match)
+        max_retries: Maximum retry attempts
     
     Returns:
-        Dictionary with validation results including metadata for duplicate detection
+        Dict with validation results and metadata for duplicate detection
     """
-    # Get current date for validation
+    # Calculate dates for validation
     current_date = datetime.now()
     current_date_str = current_date.strftime("%Y-%m-%d")
-    max_acceptable_date = (current_date + timedelta(days=1)).strftime("%Y-%m-%d")
+    old_receipt_threshold = (current_date - timedelta(days=5)).strftime("%Y-%m-%d")
     
     for attempt in range(max_retries):
         try:
             logger.info(f"Gemini validation attempt {attempt + 1}/{max_retries} for image: {image_path}")
             
-            # Open and prepare the image
             image = Image.open(image_path)
             
-            # Enhanced prompt with FUZZY matching instructions
+            # Enhanced prompt with multilingual and old receipt detection
             prompt = f"""
-Analyze this payment receipt image and extract the following information in JSON format:
+Analyze this payment receipt and extract information in JSON format:
 
 {{
-  "account_number": "extracted account number or recipient info",
-  "amount": extracted payment amount as a number,
-  "date": "payment date in YYYY-MM-DD format if visible",
-  "transaction_id": "transaction/reference number if visible (can be ANY field that looks like a unique ID)",
-  "sender_name": "sender/payer name if visible",
-  "sender_account": "sender account number if visible",
-  "currency": "detected currency (likely SDG - Sudanese Pound)",
+  "account_number": "extracted account/recipient info",
+  "amount": extracted amount as number,
+  "date": "payment date in YYYY-MM-DD format",
+  "time": "payment time if visible (HH:MM format)",
+  "transaction_id": "unique transaction identifier",
+  "sender_name": "payer/sender name",
+  "recipient_name": "beneficiary/recipient name",
+  "sender_account": "sender account number",
+  "currency": "detected currency",
   "is_valid": true or false,
-  "validation_notes": "brief explanation (max 80 words)",
+  "validation_notes": "explanation (max 60 words)",
   "account_match_confidence": 0-100,
   "amount_match_confidence": 0-100,
-  "tampering_indicators": [
-    "list any visual signs of editing or fraud (empty array if none)"
-  ],
+  "days_since_transfer": estimated days between transfer date and today,
+  "tampering_indicators": [],
   "authenticity_score": 0-100
 }}
 
 **FLEXIBLE Validation Rules:**
 
-1. **ACCOUNT NUMBER** (FUZZY matching - be LENIENT):
-   - Target account: {expected_account}
-   - Look for fields like: "To Account", "Recipient", "Beneficiary", "Account Number", "رقم الحساب", "المستفيد"
-   - Accept if account CONTAINS or IS CONTAINED IN the target (partial match OK)
-   - Remove spaces, dashes, and special characters before comparing
-   - If last 4-6 digits match, that's acceptable
-   - Set account_match_confidence (0-100):
-     * 100: Perfect exact match
-     * 80-99: Very close (last 6+ digits match, or same with formatting differences)
-     * 60-79: Reasonable match (last 4-5 digits match, or similar pattern)
-     * 40-59: Weak match (some similarity detected)
-     * 0-39: No meaningful match
+1. **ACCOUNT NUMBER** (fuzzy match):
+   - Target: {expected_account}
+   - Look for: "To Account", "Recipient", "Beneficiary", "إلى حساب", "المستفيد", "رقم الحساب"
+   - Accept partial matches (last 4-6 digits OK)
+   - Set account_match_confidence based on similarity
    - Only reject if confidence < 40
 
-2. **AMOUNT** (FLEXIBLE tolerance):
-   - Expected: {expected_amount:.2f} SDG
-   - Accept if within 5% tolerance: {expected_amount * 0.95:.2f} to {expected_amount * 1.05:.2f} SDG
-   - Set amount_match_confidence (0-100):
-     * 100: Exact match
-     * 90-99: Within 1%
-     * 80-89: Within 2-3%
-     * 70-79: Within 5%
-     * 0-69: Outside acceptable range
+2. **AMOUNT** (accept HIGHER amounts):
+   - Minimum expected: {expected_amount:.2f} SDG
+   - ✅ ACCEPT if amount >= {expected_amount * 0.95:.2f} SDG (allow 5% tolerance for lower)
+   - ✅ ACCEPT ANY amount HIGHER than expected (no upper limit)
+   - Set amount_match_confidence:
+     * 100: Exact match or higher
+     * 95+: Slightly lower but within 5%
+     * <95: Below acceptable threshold
+   - Only reject if amount < {expected_amount * 0.95:.2f}
 
-3. **DATE VALIDATION** (reject only if clearly wrong):
-   - Current date: {current_date_str}
-   - Receipt date CANNOT be in the future (after {max_acceptable_date})
-   - Old dates (even 1+ years) are OK - don't reject unless clearly fake
-   - Only flag very old dates (>2 years) in tampering_indicators as INFO, not rejection
+3. **DATE & TIME EXTRACTION** (multilingual - CRITICAL):
+   - Look for fields labeled:
+     * English: "Date", "Transfer Date", "Transaction Date", "Date/Time"
+     * Arabic: "التاريخ", "تاريخ التحويل", "التاريخ والزمن", "التاريخ والوقت"
+   - Extract date in YYYY-MM-DD format
+   - Extract time if visible (HH:MM format)
+   - **OLD RECEIPT DETECTION** (IMPORTANT):
+     * Today's date: {current_date_str}
+     * Flag threshold: {old_receipt_threshold} (5 days ago)
+     * Calculate "days_since_transfer": How many days between receipt date and today
+     * If receipt date is BEFORE {old_receipt_threshold} (>5 days old), add to tampering_indicators:
+       "Receipt is {{X}} days old - transfer made on {{date}} but submitted today ({current_date_str})"
 
-4. **TRANSACTION ID EXTRACTION** (CRITICAL - be FLEXIBLE):
-   - Look for ANY field that could be a unique identifier:
-     * Transaction ID, Reference Number, Operation Number, Receipt Number
-     * Any alphanumeric code that looks unique (e.g., "TXN123456", "REF-2024-001")
-     * Even internal reference numbers are OK
-   - Extract even if format is unusual - we just need SOMETHING unique for duplicate detection
+4. **TRANSACTION ID** (multilingual extraction - CRITICAL):
+   - Look for ANY unique identifier with labels like:
+     * English: "Transaction ID", "Reference Number", "Receipt Number", "Operation Number", "Ref No", "TXN ID"
+     * Arabic: "رقم العملية", "رقم المرجع", "رقم الإيصال", "الرقم المرجعي", "معرف العملية"
+   - Extract the VALUE (not the label), e.g., if you see "رقم العملية: 123456", extract "123456"
+   - Accept ANY alphanumeric format (numbers, letters, dashes, combinations)
+   - This is MANDATORY for duplicate detection - extract even if format is unusual
 
-5. **SENDER INFORMATION** (extract if visible, don't require):
-   - sender_name: Any name associated with "From", "Sender", "Payer", "المرسل"
-   - sender_account: Sender's account if visible
-   - These are optional - set to null if not found
+5. **SENDER & RECIPIENT NAMES** (multilingual):
+   - **sender_name**: Look for:
+     * "From", "Sender", "Payer", "Account Holder"
+     * "من", "المرسل", "الدافع", "صاحب الحساب"
+   - **recipient_name**: Look for:
+     * "To", "Recipient", "Beneficiary", "Payee"
+     * "إلى", "المستفيد", "المستلم"
+   - Extract BOTH if visible (one may be missing)
+   - If sender_name is not found, use recipient_name as fallback
 
-6. **VISUAL AUTHENTICITY CHECKS** (only flag OBVIOUS tampering):
-   - Add to tampering_indicators ONLY if signs are clear:
-     * Very obvious Photoshop artifacts
+6. **VISUAL AUTHENTICITY** (lenient):
+   - Only flag OBVIOUS signs of tampering:
+     * Clear Photoshop artifacts
      * Completely misaligned text
-     * Different font/style in critical fields
-     * Clear copy-paste evidence
-   - Be LENIENT - low-quality images, blurry text, or poor formatting is NOT tampering
+     * Different fonts in critical fields
+   - Low quality images are NOT tampering
 
-**Decision Rules (RELAXED):**
+**Decision Rules:**
 - Set "is_valid" to TRUE if:
-  * account_match_confidence >= 40 (or no account found in receipt)
-  * amount_match_confidence >= 70
-  * Date is not in future
+  * account_match_confidence >= 40
+  * amount >= {expected_amount * 0.95:.2f}
   * authenticity_score >= 50
-  * Less than 3 CLEAR tampering indicators
+  * Less than 3 clear tampering indicators
+  * (Old receipts are flagged but NOT automatically rejected)
 
 - Set "is_valid" to FALSE only if:
-  * account_match_confidence < 40 AND account was clearly visible
-  * amount_match_confidence < 70
-  * Date is in the future
+  * account_match_confidence < 40 (and account was clearly visible)
+  * amount < {expected_amount * 0.95:.2f}
   * authenticity_score < 50
-  * 3+ obvious tampering indicators
+  * 3+ obvious tampering signs
 
-**Authenticity Score Guidelines (LENIENT):**
-- 80-100: Looks legitimate (even if low quality)
-- 60-79: Some concerns but probably real
-- 40-59: Multiple suspicious elements
-- 0-39: Clear signs of forgery
+**IMPORTANT**: 
+- Accept receipts even if they're old (just flag in tampering_indicators)
+- Accept ANY amount equal to or HIGHER than expected
+- Extract Arabic field names (رقم العملية, التاريخ والزمن, etc.)
 
-**IMPORTANT**: When in doubt, ACCEPT the receipt (set is_valid=true). Only reject if you're CONFIDENT it's fake.
-
-Return ONLY the JSON object, no other text.
+Return ONLY the JSON object.
 """
             
-            # Generate content
-            logger.debug(f"Sending image to Gemini API: {image_path}")
+            # Generate response
+            logger.debug(f"Sending to Gemini: {image_path}")
             response = model.generate_content([prompt, image])
-            
-            # Extract and clean the response text
             response_text = response.text.strip()
-            logger.debug(f"Gemini raw response: {response_text[:200]}...")
             
-            # Remove markdown code blocks if present
+            # Clean response
             if response_text.startswith("```json"):
                 response_text = response_text[7:].strip()
             elif response_text.startswith("```"):
@@ -169,101 +165,105 @@ Return ONLY the JSON object, no other text.
             if response_text.endswith("```"):
                 response_text = response_text[:-3].strip()
             
-            # Parse JSON response
+            # Parse JSON
             try:
                 data = json.loads(response_text)
-                logger.info(f"Gemini validation successful: is_valid={data.get('is_valid')}, amount={data.get('amount')}")
-            except json.JSONDecodeError as json_err:
-                logger.error(f"Failed to parse Gemini JSON response: {json_err}")
-                logger.error(f"Response text: {response_text}")
-                raise ValueError(f"Invalid JSON response from Gemini: {json_err}")
+                logger.info(f"Gemini result: valid={data.get('is_valid')}, amount={data.get('amount')}")
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON parse error: {e}")
+                raise ValueError(f"Invalid Gemini JSON: {e}")
             
-            # Extract validation result
+            # Extract fields
             is_valid = data.get("is_valid", False)
-            account_number = data.get("account_number", "")
-            amount = data.get("amount", 0)
-            validation_notes = data.get("validation_notes", "")
             extracted_date = data.get("date")
+            extracted_time = data.get("time")
             transaction_id = data.get("transaction_id", "")
             sender_name = data.get("sender_name", "")
-            sender_account = data.get("sender_account", "")
+            recipient_name = data.get("recipient_name", "")
             tampering_indicators = data.get("tampering_indicators", [])
-            authenticity_score = data.get("authenticity_score", 100)
-            account_match_confidence = data.get("account_match_confidence", 50)
-            amount_match_confidence = data.get("amount_match_confidence", 50)
+            days_since_transfer = data.get("days_since_transfer")
             
-            # Python-side FUZZY validation (just in case Gemini is too strict)
+            # Parse datetime
             receipt_datetime = None
             if extracted_date:
                 try:
-                    receipt_datetime = datetime.strptime(extracted_date, "%Y-%m-%d")
+                    # Parse date and optionally time
+                    if extracted_time:
+                        datetime_str = f"{extracted_date} {extracted_time}"
+                        receipt_datetime = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M")
+                    else:
+                        receipt_datetime = datetime.strptime(extracted_date, "%Y-%m-%d")
                     
-                    # Only reject if CLEARLY in the future
-                    if receipt_datetime > current_date + timedelta(days=1):
-                        logger.warning(f"Future date detected: {extracted_date}")
-                        is_valid = False
-                        validation_notes = f"التاريخ في المستقبل! {extracted_date}"
+                    # Calculate days since transfer (Python-side verification)
+                    actual_days_since = (current_date - receipt_datetime).days
                     
-                except ValueError:
-                    logger.warning(f"Invalid date format: {extracted_date}, but continuing...")
+                    # Flag if receipt is >5 days old
+                    if actual_days_since > 5:
+                        old_receipt_warning = f"تحذير: الإيصال قديم - تم التحويل قبل {actual_days_since} أيام في تاريخ {extracted_date}"
+                        logger.warning(f"Old receipt detected: {actual_days_since} days old (date: {extracted_date})")
+                        if old_receipt_warning not in tampering_indicators:
+                            tampering_indicators.append(old_receipt_warning)
+                    
+                except ValueError as e:
+                    logger.warning(f"Date parse error: {extracted_date}, {e}")
             
-            # Build result with enhanced metadata
+            # Use recipient_name as fallback if sender_name is missing
+            final_sender_name = sender_name if sender_name else recipient_name
+            
+            # Build result
             result = {
                 "is_valid": bool(is_valid),
-                "account_number": str(account_number) if account_number else None,
-                "account_match_confidence": account_match_confidence,
-                "amount": float(amount) if amount else None,
-                "amount_match_confidence": amount_match_confidence,
+                "account_number": data.get("account_number"),
+                "account_match_confidence": data.get("account_match_confidence", 50),
+                "amount": float(data.get("amount")) if data.get("amount") else None,
+                "amount_match_confidence": data.get("amount_match_confidence", 50),
                 "date": extracted_date,
+                "time": extracted_time,
                 "transfer_datetime": receipt_datetime,
                 "transaction_id": transaction_id if transaction_id else None,
-                "sender_name": sender_name if sender_name else None,
-                "sender_account": sender_account if sender_account else None,
+                "sender_name": final_sender_name if final_sender_name else None,
+                "recipient_name": recipient_name if recipient_name else None,
+                "sender_account": data.get("sender_account"),
                 "currency": data.get("currency", "SDG"),
-                "reason": validation_notes if not is_valid else "تم التحقق من الدفع بنجاح ✅",
+                "reason": data.get("validation_notes", "تم التحقق من الإيصال"),
                 "tampering_indicators": tampering_indicators,
-                "authenticity_score": authenticity_score,
+                "authenticity_score": data.get("authenticity_score", 100),
+                "days_since_transfer": days_since_transfer,
                 "raw_response": response_text
             }
             
-            logger.info(f"✅ Gemini validation completed on attempt {attempt + 1}")
-            logger.info(f"📊 Scores - Account: {account_match_confidence}%, Amount: {amount_match_confidence}%, Auth: {authenticity_score}%")
-            logger.info(f"📋 Metadata - TxID: {transaction_id}, Sender: {sender_name}, Date: {extracted_date}")
+            logger.info(f"✅ Validation complete - Scores: Acc={result['account_match_confidence']}%, Amt={result['amount_match_confidence']}%, Auth={result['authenticity_score']}%")
+            logger.info(f"📋 Metadata: TxID={transaction_id}, Sender={final_sender_name}, Date={extracted_date}, DaysOld={days_since_transfer}")
+            
             return result
             
         except Exception as e:
-            logger.error(f"Gemini API attempt {attempt + 1}/{max_retries} failed: {type(e).__name__}: {e}")
+            logger.error(f"Attempt {attempt + 1} failed: {e}")
             
-            # If this was the last attempt, return failure result
             if attempt == max_retries - 1:
-                logger.error(f"All {max_retries} Gemini validation attempts failed for {image_path}")
+                # Simple, friendly manual review message (no warnings)
                 return {
                     "is_valid": False,
                     "requires_manual_review": True,
                     "account_number": None,
-                    "account_match_confidence": 0,
                     "amount": None,
-                    "amount_match_confidence": 0,
                     "date": None,
                     "transfer_datetime": None,
                     "transaction_id": None,
                     "sender_name": None,
-                    "sender_account": None,
+                    "recipient_name": None,
                     "currency": "SDG",
-                    "reason": f"فشل التحقق التلقائي - يتطلب مراجعة يدوية ⚠️",
+                    "reason": "تم إرسال إيصالك للمراجعة. سيتم الرد عليك قريباً",  # Simple, no warning icons
                     "tampering_indicators": [],
                     "authenticity_score": 0,
                     "raw_response": None
                 }
             
-            # Wait before retry
-            wait_time = 2 ** attempt
-            logger.info(f"Waiting {wait_time}s before retry...")
-            await asyncio.sleep(wait_time)
+            await asyncio.sleep(2 ** attempt)
     
     return {
         "is_valid": False,
         "requires_manual_review": True,
-        "reason": "فشل التحقق - يتطلب مراجعة يدوية",
+        "reason": "تم إرسال إيصالك للمراجعة",
         "raw_response": None
     }
