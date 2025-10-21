@@ -176,8 +176,8 @@ async def send_course_invite_link(update: Update, context: ContextTypes.DEFAULT_
             logger.warning(f"Course {course_id} has no group configured")
             await context.bot.send_message(
                 telegram_user_id,
-                f"⚠️ لا توجد مجموعة مسجلة لدورة {course.course_name} حالياً.\n"
-                f"سيتم إضافتك عند توفر الرابط."
+                f"⚠️ [translate:لا توجد مجموعة مسجلة لدورة] {course.course_name} [translate:حالياً.]\n"
+                f"[translate:سيتم إضافتك عند توفر الرابط.]"
             )
             return False
         
@@ -192,15 +192,15 @@ async def send_course_invite_link(update: Update, context: ContextTypes.DEFAULT_
                 name=f"Student {telegram_user_id} - {course.course_name[:20]}"  # Identifier for admin
             )
             
-            # Send fresh link to user
+            # Send fresh link to user - NO MARKDOWN to avoid parsing errors
             await context.bot.send_message(
                 telegram_user_id,
-                f"🎉 مبروك! تم قبول تسجيلك في دورة **{course.course_name}**\n\n"
-                f"📱 انضم إلى مجموعة الدورة:\n"
+                f"🎉 [translate:مبروك! تم قبول تسجيلك في دورة] {course.course_name}\n\n"
+                f"📱 [translate:انضم إلى مجموعة الدورة:]\n"
                 f"🔗 {invite_link.invite_link}\n\n"
-                f"✅ اضغط على الرابط وأرسل طلب انضمام\n"
-                f"سيتم قبولك تلقائياً خلال ثوانٍ!",
-                parse_mode='Markdown'
+                f"✅ [translate:اضغط على الرابط وأرسل طلب انضمام]\n"
+                f"[translate:سيتم قبولك تلقائياً خلال ثوانٍ!]"
+                # NO parse_mode - avoids all Markdown parsing errors!
             )
             
             logger.info(f"✅ Generated and sent fresh invite link for user {telegram_user_id}, course {course_id}")
@@ -214,20 +214,21 @@ async def send_course_invite_link(update: Update, context: ContextTypes.DEFAULT_
                 logger.info(f"⚠️ Falling back to stored permanent link for course {course_id}")
                 await context.bot.send_message(
                     telegram_user_id,
-                    f"🎉 مبروك! تم قبول تسجيلك في دورة **{course.course_name}**\n\n"
-                    f"📱 انضم إلى مجموعة الدورة:\n"
+                    f"🎉 [translate:مبروك! تم قبول تسجيلك في دورة] {course.course_name}\n\n"
+                    f"📱 [translate:انضم إلى مجموعة الدورة:]\n"
                     f"🔗 {course.telegram_group_link}\n\n"
-                    f"💡 انقر على الرابط وأرسل طلب انضمام - سيتم قبولك تلقائياً",
-                    parse_mode='Markdown'
+                    f"💡 [translate:انقر على الرابط وأرسل طلب انضمام - سيتم قبولك تلقائياً]"
+                    # NO parse_mode
                 )
                 return True
             
             # Complete failure - notify user
             await context.bot.send_message(
                 telegram_user_id,
-                f"⚠️ تم قبول تسجيلك في دورة {course.course_name}\n"
-                f"لكن حدث خطأ في إنشاء رابط المجموعة.\n"
-                f"سيتم إرسال الرابط لك قريباً."
+                f"⚠️ [translate:تم قبول تسجيلك في دورة] {course.course_name}\n"
+                f"[translate:لكن حدث خطأ في إنشاء رابط المجموعة.]\n"
+                f"[translate:سيتم إرسال الرابط لك قريباً.]"
             )
             return False
+
 
