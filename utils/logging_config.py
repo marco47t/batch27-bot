@@ -38,7 +38,7 @@ def setup_cloudwatch_logging(aws_region='us-east-1'):
         root_logger.handlers.clear()
         
         # ==========================================
-        # 1. CONSOLE HANDLER (for Railway logs)
+        # 1. CONSOLE HANDLER (for local/EC2 logs)
         # ==========================================
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(logging.INFO)

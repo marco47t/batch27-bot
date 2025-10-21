@@ -49,7 +49,7 @@ setup_cloudwatch_logging(aws_region='eu-north-1')  # Change to your AWS region
 
 # Get logger for this module
 logger = logging.getLogger(__name__)
-
+logging.getLogger('httpx').setLevel(logging.WARNING)
 def run_database_migration():
     """Run database migration to fix BigInteger issue"""
     from sqlalchemy import create_engine, text, inspect
