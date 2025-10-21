@@ -42,26 +42,13 @@ from handlers.menu_handlers import contact_admin_callback, contact_admin_text_ha
 from database import crud, get_db, init_db
 from utils.helpers import handle_error
 import config
+from utils.logging_config import setup_cloudwatch_logging
 
-log_dir = os.path.dirname(os.path.abspath(__file__))
-app_log = os.path.join(log_dir, 'bot.log')
-error_log = os.path.join(log_dir, 'bot_error.log')
+# Setup CloudWatch + Console logging with 3 separate log groups
+setup_cloudwatch_logging(aws_region='eu-north-1')  # Change to your AWS region
 
-# Create handlers
-handlers = [logging.StreamHandler(sys.stdout)]  # Always log to console
-
-# Try to add file handlers
-try:
-    handlers.append(logging.FileHandler(app_log, mode='a'))
-    handlers.append(logging.FileHandler(error_log, mode='a'))
-except PermissionError:
-    print(f"Warning: Could not write to log files in {log_dir}")
-
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=getattr(logging, config.LOG_LEVEL.upper()),
-    handlers=handlers
-)
+# Get logger for this module
+logger = logging.getLogger(__name__)
 
 def run_database_migration():
     """Run database migration to fix BigInteger issue"""
