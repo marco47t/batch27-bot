@@ -118,6 +118,14 @@ class Transaction(Base):
     status = Column(Enum(TransactionStatus), default=TransactionStatus.PENDING, nullable=False)
     admin_reviewed_by = Column(Integer, nullable=True)
     admin_review_date = Column(DateTime, nullable=True)
+    
+    # ✅ NEW: Store extracted receipt details
+    receipt_transaction_id = Column(String(100), nullable=True, index=True)  # ✅ INDEXED for duplicate check
+    receipt_transfer_date = Column(DateTime, nullable=True)
+    receipt_sender_name = Column(String(255), nullable=True)
+    receipt_amount = Column(Float, nullable=True)  # ✅ NEW: Store extracted amount
+    
+    # Existing fields
     extracted_account_number = Column(String(100), nullable=True)
     extracted_amount = Column(Float, nullable=True)
     failure_reason = Column(Text, nullable=True)
@@ -130,7 +138,8 @@ class Transaction(Base):
     enrollment = relationship("Enrollment", back_populates="transactions")
     
     def __repr__(self):
-        return f"<Transaction {self.transaction_id}: {self.status.value}>"
+        return f"<Transaction {self.transaction_id} - Status: {self.status.value}>"
+
 
 
 class Cart(Base):

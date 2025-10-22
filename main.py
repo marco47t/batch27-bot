@@ -500,7 +500,7 @@ def main():
     # ==========================
     application.add_handler(MessageHandler(
         filters.PHOTO | filters.Document.IMAGE, 
-        payment_handlers.receipt_upload_message_handler
+        payment_handlers.handle_payment_receipt
     ))
 
     application.add_handler(MessageHandler(

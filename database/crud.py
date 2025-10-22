@@ -275,6 +275,7 @@ def update_transaction(
     return transaction
 
 
+
 def get_pending_transactions(session: Session) -> List[Transaction]:
     return session.query(Transaction).filter(
         Transaction.status == TransactionStatus.PENDING

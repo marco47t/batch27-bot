@@ -22,40 +22,61 @@ async def proceed_to_payment_callback(update: Update, context: ContextTypes.DEFA
     """Handle proceed to payment button click"""
     query = update.callback_query
     await query.answer()
+    
     telegram_user_id = query.from_user.id
     
-    logger.info(f"User {telegram_user_id} proceeding to payment")
+    with get_db() as session:
+        internal_user_id = crud.get_user_by_telegram_id(session, telegram_user_id).user_id
+        
+        # Get selected enrollments from payment context
+        payment_context = context.user_data.get('payment_selection', {})
+        selected_enrollment_ids = payment_context.get('selected_enrollment_ids', [])
+        
+        if not selected_enrollment_ids:
+            await query.edit_message_text("❌ لم يتم العثور على دورات محددة للدفع.")
+            return
+        
+        # Calculate total
+        enrollments = crud.get_enrollments_by_ids(session, selected_enrollment_ids)
+        total_amount = sum([
+            (e.payment_amount - (e.amount_paid or 0))
+            for e in enrollments
+        ])
+        
+        if total_amount <= 0:
+            await query.edit_message_text("✅ جميع الدورات المحددة مدفوعة بالكامل!")
+            return
+        
+        # Store selected enrollments for receipt processing
+        context.user_data['pending_payment_enrollments'] = selected_enrollment_ids
+        
+        # Send payment instructions
+        instructions_text = payment_instructions_message(total_amount)
+        
+        await query.edit_message_text(
+            instructions_text,
+            reply_markup=payment_upload_keyboard()
+        )
     
-    cart_total = context.user_data.get("cart_total_for_payment")
-    pending_enrollment_ids = context.user_data.get("pending_enrollment_ids_for_payment", [])
-    
-    if not cart_total or not pending_enrollment_ids:
-        logger.error(f"User {telegram_user_id} payment data missing: cart_total={cart_total}, enrollments={pending_enrollment_ids}")
-        await query.edit_message_text(error_message("payment_data_missing"), reply_markup=back_to_main_keyboard())
-        return
-    
-    context.user_data["current_payment_total"] = cart_total
-    context.user_data["current_payment_enrollment_ids"] = pending_enrollment_ids
-    context.user_data["awaiting_receipt_upload"] = True
-    
-    logger.info(f"User {telegram_user_id} payment initiated: amount=${cart_total}, enrollments={pending_enrollment_ids}")
-    
-    await query.edit_message_text(
-        payment_instructions_message(cart_total),
-        reply_markup=payment_upload_keyboard(),
-        parse_mode='Markdown'
-    )
+    log_user_action(telegram_user_id, "proceed_to_payment", f"Total: {total_amount} SDG")
 
 
-async def receipt_upload_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle receipt image/document uploads with comprehensive fraud detection and S3 storage"""
+async def handle_payment_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle uploaded receipt images with comprehensive fraud detection
+    """
+    telegram_user_id = update.effective_user.id
     
-    if not context.user_data.get("awaiting_receipt_upload"):
+    # Validate file
+    if not update.message.photo and not update.message.document:
+        await update.message.reply_text(
+            "❌ يرجى إرسال صورة الإيصال فقط.",
+            reply_markup=back_to_main_keyboard()
+        )
         return
     
-    user = update.effective_user
-    file = None
-    telegram_user_id = user.id
+    # Send processing message
+    processing_msg = await update.message.reply_text(receipt_processing_message())
     
     logger.info(f"Receipt upload started for user {telegram_user_id}")
     
@@ -1167,113 +1188,128 @@ ID: <code>{telegram_user_id}</code>
                 logger.info(f"Cleared cart for user {telegram_user_id}")
             
             session.commit()
+            
+            # Notify user
+            user_message = f"""
+✅ **تم قبول الدفع الجزئي!**
+
+تم التحقق من إيصال الدفع بنجاح.
+
+🎓 **الدورة:** {enrollment.course.course_name}
+💰 **المبلغ المدفوع:** {payment_amount:.0f} جنيه سوداني
+📊 **الإجمالي:** {enrollment.amount_paid:.0f}/{enrollment.payment_amount:.0f} جنيه
+⚠️ **المتبقي:** {remaining:.0f} جنيه سوداني
+
+لإكمال التسجيل، يرجى دفع المبلغ المتبقي.
+"""
+            
+            await context.bot.send_message(
+                chat_id=user.telegram_user_id,
+                text=user_message,
+                parse_mode='Markdown'
+            )
+            
+            await query.edit_message_text(
+                f"✅ **PARTIALLY APPROVED**\n\n"
+                f"Transaction #{transaction_id} approved.\n"
+                f"User: {user.first_name} (@{user.username or 'N/A'})\n"
+                f"Course: {enrollment.course.course_name}\n"
+                f"Amount: {payment_amount:.0f} SDG\n"
+                f"Paid: {enrollment.amount_paid:.0f}/{enrollment.payment_amount:.0f} SDG\n"
+                f"⚠️ **Remaining:** {remaining:.0f} SDG\n\n"
+                f"User has been notified to pay remaining amount.",
+                parse_mode='Markdown'
+            )
+            
+            log_user_action(admin_user_id, "admin_approve_payment", f"transaction_id={transaction_id}, enrollment_id={enrollment.enrollment_id}, partial_payment")
+
+
+async def admin_reject_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Admin rejects a payment transaction
+    """
+    query = update.callback_query
+    await query.answer()
     
-    # ==================== USER NOTIFICATIONS ====================
+    # Extract transaction_id from callback data
+    transaction_id = int(query.data.split('_')[-1])
     
-    if result["is_valid"]:
-        logger.info(f"Payment SUCCESS for user {telegram_user_id}, enrollments: {enrollment_ids_str}, Fraud Score: {fraud_analysis['fraud_score']}")
+    admin_user_id = query.from_user.id
+    
+    with get_db() as session:
+        from database.models import Transaction as TransactionModel
         
-        # ✅ DELETE PROCESSING MESSAGE FIRST
-        try:
-            if update.message:
-                await update.message.delete()
-        except Exception as e:
-            logger.warning(f"Could not delete processing message: {e}")
+        transaction = session.query(TransactionModel).filter(
+            TransactionModel.transaction_id == transaction_id
+        ).first()
         
-        # ✅ NO redundant success message - send_course_invite_link already sent the success message with group link
+        if not transaction:
+            await query.edit_message_text("❌ Transaction not found.")
+            return
         
-        log_user_action(telegram_user_id, "payment_success", f"enrollment_ids={enrollment_ids_str}, fraud_score={fraud_analysis['fraud_score']}")
-    else:
-        logger.warning(f"Payment FAILED for user {telegram_user_id}: {result.get('reason')}, Fraud Score: {fraud_analysis['fraud_score']}")
+        enrollment = transaction.enrollment
+        user = enrollment.user
         
-        # Send user notification
-        await update.message.reply_text(
-            payment_failed_message(result.get("reason", "Invalid receipt.")),
-            reply_markup=back_to_main_keyboard(),
-            parse_mode='HTML'
-        )
+        # Update transaction status
+        transaction.status = TransactionStatus.REJECTED
+        transaction.admin_reviewed_by = admin_user_id
+        transaction.admin_review_date = datetime.utcnow()
         
-        # Send admin notification with receipt image
-        extracted_account = result.get('account_number', 'N/A')
-        extracted_amount = result.get('amount', 0)
-        extracted_currency = result.get('currency', 'SDG')
+        # Update enrollment status
+        enrollment.payment_status = PaymentStatus.FAILED
         
-        # Get course names for admin notification
-        course_names = []
-        with get_db() as temp_session:
-            for eid in enrollment_ids_to_update:
-                enrollment = crud.get_enrollment_by_id(temp_session, eid)
-                if enrollment and enrollment.course:
-                    course_names.append(enrollment.course.course_name)
-        course_names_str = ", ".join(course_names) if course_names else "N/A"
+        session.commit()
         
-        admin_caption = f"""
-🔴 Receipt Validation Failed
+        # Notify user
+        user_message = f"""
+❌ **تم رفض الإيصال**
 
-👤 User: {user.first_name} {user.last_name or ''}
-Username: @{user.username or 'N/A'}
-ID: {telegram_user_id}
+عذراً، لم يتم قبول إيصال الدفع.
 
-📄 Extracted Data:
-• Account: {extracted_account}
-• Amount: {gemini_result.get('amount') or 0:.2f} {gemini_result.get('currency', 'SDG')}
-• Expected: {expected_amount_for_gemini:.2f} SDG
+🎓 **الدورة:** {enrollment.course.course_name}
 
-🟢 Fraud Score: {fraud_analysis['fraud_score']}/100 (LOW RISK)
+⚠️ **السبب:**
+{transaction.failure_reason or 'لم يتم التحقق من الإيصال'}
 
-❌ Validation Issue:
-{result.get('reason', 'Validation failed')[:150]}...
+📝 **الإجراء المطلوب:**
+• تحقق من رقم الحساب الصحيح
+• تأكد من وضوح الصورة
+• قم بإرسال إيصال جديد من "دوراتي"
 
-📚 Courses: {course_names_str}
-📝 Enrollment IDs: {enrollment_ids_str}
-
-⚠️ Action Required: Manual review recommended
+للمساعدة، تواصل مع الإدارة.
 """
         
-        try:
-            # Download from S3 if needed
-            if file_path.startswith('https://'):
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as download_temp:
-                    download_temp_path = download_temp.name
-                download_receipt_from_s3(file_path, download_temp_path)
-                photo_to_send = download_temp_path
-            else:
-                photo_to_send = file_path
-            
-            with open(photo_to_send, "rb") as f:
-                await context.bot.send_photo(
-                    chat_id=config.ADMIN_CHAT_ID,
-                    photo=f,
-                    caption=admin_caption,
-                    reply_markup=failed_receipt_admin_keyboard(enrollment_ids_str, telegram_user_id),
-                    parse_mode='HTML'
-                )
-            
-            # Clean up downloaded temp file
-            if file_path.startswith('https://') and os.path.exists(photo_to_send):
-                os.remove(photo_to_send)
-            
-            logger.info(f"Sent admin notification with image for user {telegram_user_id}")
-        except Exception as e:
-            logger.error(f"Failed to send admin notification for user {telegram_user_id}: {e}")
-            await send_admin_notification(
-                context,
-                f"Receipt validation failed for user {telegram_user_id}. File: {file_path}"
-            )
-    
-    # Clean up context data
-    context.user_data["awaiting_receipt_upload"] = False
-    context.user_data.pop("cart_total_for_payment", None)
-    context.user_data.pop("pending_enrollment_ids_for_payment", None)
-    context.user_data.pop("current_payment_enrollment_ids", None)
-    context.user_data.pop("current_payment_total", None)
-    context.user_data.pop("resubmission_enrollment_id", None)
-    context.user_data.pop("reupload_amount", None)
-    
-    # Clean up temporary file
-    try:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-            logger.info(f"Cleaned up temp file: {temp_path}")
-    except Exception as e:
-        logger.warning(f"Failed to clean up temp file {temp_path}: {e}")
+        await context.bot.send_message(
+            chat_id=user.telegram_user_id,
+            text=user_message,
+            parse_mode='Markdown'
+        )
+        
+        await query.edit_message_text(
+            f"❌ **REJECTED**\n\n"
+            f"Transaction #{transaction_id} rejected.\n"
+            f"User: {user.first_name} (@{user.username or 'N/A'})\n"
+            f"Course: {enrollment.course.course_name}\n\n"
+            f"User has been notified.",
+            parse_mode='Markdown'
+        )
+        
+        log_user_action(admin_user_id, "admin_reject_payment", f"transaction_id={transaction_id}, enrollment_id={enrollment.enrollment_id}")
+
+
+# ===== EXPORTS =====
+
+__all__ = [
+    'proceed_to_payment_callback',
+    'handle_payment_receipt',
+    'select_courses_for_payment',
+    'toggle_payment_selection',
+    'clear_payment_selection',
+    'view_my_courses',
+    'retry_failed_payment',
+    'view_payment_history',
+    'cancel_payment',
+    'request_support',
+    'admin_approve_payment',
+    'admin_reject_payment',
+]
