@@ -22,1150 +22,1073 @@ async def proceed_to_payment_callback(update: Update, context: ContextTypes.DEFA
     """Handle proceed to payment button click"""
     query = update.callback_query
     await query.answer()
+    
     telegram_user_id = query.from_user.id
     
-    logger.info(f"User {telegram_user_id} proceeding to payment")
-    
-    cart_total = context.user_data.get("cart_total_for_payment")
-    pending_enrollment_ids = context.user_data.get("pending_enrollment_ids_for_payment", [])
-    
-    if not cart_total or not pending_enrollment_ids:
-        logger.error(f"User {telegram_user_id} payment data missing: cart_total={cart_total}, enrollments={pending_enrollment_ids}")
-        await query.edit_message_text(error_message("payment_data_missing"), reply_markup=back_to_main_keyboard())
-        return
-    
-    context.user_data["current_payment_total"] = cart_total
-    context.user_data["current_payment_enrollment_ids"] = pending_enrollment_ids
-    context.user_data["awaiting_receipt_upload"] = True
-    
-    logger.info(f"User {telegram_user_id} payment initiated: amount=${cart_total}, enrollments={pending_enrollment_ids}")
-    
-    await query.edit_message_text(
-        payment_instructions_message(cart_total),
-        reply_markup=payment_upload_keyboard(),
-        parse_mode='Markdown'
-    )
-
-
-async def receipt_upload_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle receipt image/document uploads with comprehensive fraud detection and S3 storage"""
-    
-    if not context.user_data.get("awaiting_receipt_upload"):
-        return
-    
-    user = update.effective_user
-    file = None
-    telegram_user_id = user.id
-    
-    logger.info(f"Receipt upload started for user {telegram_user_id}")
-    
-    # GET INTERNAL USER ID FIRST
     with get_db() as session:
-        db_user = crud.get_or_create_user(
-            session,
-            telegram_user_id=telegram_user_id,
-            username=user.username,
-            first_name=user.first_name,
-            last_name=user.last_name
+        internal_user_id = crud.get_user_by_telegram_id(session, telegram_user_id).user_id
+        
+        # Get selected enrollments from payment context
+        payment_context = context.user_data.get('payment_selection', {})
+        selected_enrollment_ids = payment_context.get('selected_enrollment_ids', [])
+        
+        if not selected_enrollment_ids:
+            await query.edit_message_text("❌ لم يتم العثور على دورات محددة للدفع.")
+            return
+        
+        # Calculate total
+        enrollments = crud.get_enrollments_by_ids(session, selected_enrollment_ids)
+        total_amount = sum([
+            (e.payment_amount - (e.amount_paid or 0))
+            for e in enrollments
+        ])
+        
+        if total_amount <= 0:
+            await query.edit_message_text("✅ جميع الدورات المحددة مدفوعة بالكامل!")
+            return
+        
+        # Store selected enrollments for receipt processing
+        context.user_data['pending_payment_enrollments'] = selected_enrollment_ids
+        
+        # Send payment instructions
+        instructions_text = payment_instructions_message(total_amount)
+        
+        await query.edit_message_text(
+            instructions_text,
+            reply_markup=payment_upload_keyboard()
         )
-        session.flush()
-        internal_user_id = db_user.user_id
     
-    logger.info(f"User {telegram_user_id} has internal ID: {internal_user_id}")
+    log_user_action(telegram_user_id, "proceed_to_payment", f"Total: {total_amount} SDG")
+
+
+async def handle_payment_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle uploaded receipt images with comprehensive fraud detection
+    """
+    telegram_user_id = update.effective_user.id
     
-    # Validate file type
-    if update.message.document:
-        file = update.message.document
-    elif update.message.photo:
-        file = update.message.photo[-1]
-    else:
-        logger.warning(f"User {telegram_user_id} sent invalid file type")
-        await update.message.reply_text("❌ Please send a valid image or PDF receipt.", reply_markup=payment_upload_keyboard())
+    # Validate file
+    if not update.message.photo and not update.message.document:
+        await update.message.reply_text(
+            "❌ يرجى إرسال صورة الإيصال فقط.",
+            reply_markup=back_to_main_keyboard()
+        )
         return
     
-    if not validate_receipt_file(file):
-        logger.warning(f"User {telegram_user_id} receipt validation failed")
-        await update.message.reply_text("❌ Please send a valid image or PDF receipt.", reply_markup=payment_upload_keyboard())
-        return
+    # Send processing message
+    processing_msg = await update.message.reply_text(receipt_processing_message())
     
-    # Download file to temporary location first
-    file_info = await file.get_file()
-    
-    # Create temporary file
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_file:
-        temp_path = temp_file.name
-    
-    # Download to temp path
-    await file_info.download_to_drive(temp_path)
-    
-    logger.info(f"Receipt downloaded to temp path for user {telegram_user_id}: {temp_path}")
-    log_user_action(telegram_user_id, "receipt_uploaded", f"temp_path={temp_path}")
-
-    # Notify user that processing started
-    await update.message.reply_text(receipt_processing_message(), reply_markup=None)
-
-    # Get expected amount
-    expected_amount_for_gemini = context.user_data.get("reupload_amount") or context.user_data.get("current_payment_total")
-
-    if expected_amount_for_gemini is None:
-        logger.error(f"User {telegram_user_id} missing expected payment amount")
-        await update.message.reply_text(error_message("payment_amount_missing"), reply_markup=back_to_main_keyboard())
-        log_user_action(telegram_user_id, "receipt_upload_failed", "expected_amount_for_gemini missing")
-        context.user_data["awaiting_receipt_upload"] = False
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-        return
-
-    # ==================== STEP 1: GEMINI AI VALIDATION ====================
-    logger.info(f"Starting Gemini validation for user {telegram_user_id}: expected_amount=${expected_amount_for_gemini}")
-
-    gemini_result = await validate_receipt_with_gemini_ai(
-        temp_path,
-        expected_amount_for_gemini,
-        config.EXPECTED_ACCOUNTS
-    )
-
-    logger.info(f"Gemini validation result: is_valid={gemini_result.get('is_valid')}, amount={gemini_result.get('amount')}, tx_id={gemini_result.get('transaction_id')}")
-
-    # ==================== STEP 2: ENHANCED FRAUD DETECTION ====================
-    logger.info(f"Starting enhanced fraud detection for user {telegram_user_id}")
-
-    # ===== CHECK FOR DUPLICATE TRANSACTION ID =====
-    transaction_id = gemini_result.get("transaction_id")
-    duplicate_check_result = {
-        "transaction_id_duplicate": False,
-        "is_duplicate": False,
-        "similarity_score": 0
-    }
-
-    # Open session for duplicate checks
-    with get_db() as dup_session:
-        if transaction_id:
-            is_duplicate_tx = crud.check_duplicate_transaction_id(dup_session, transaction_id)
-            if is_duplicate_tx:
-                duplicate_check_result["transaction_id_duplicate"] = True
-                duplicate_check_result["duplicate_transaction_id"] = transaction_id
-                logger.warning(f"⚠️ Duplicate transaction ID detected: {transaction_id}")
-            else:
-                logger.info(f"✅ Transaction ID is unique: {transaction_id}")
-        else:
-            logger.warning(f"⚠️ No transaction ID extracted from receipt")
-
-    # ===== IMAGE FORENSICS ANALYSIS =====
-    from services.image_forensics import analyze_image_metadata
-    from services.ela_detector import perform_ela
-
-    metadata_analysis = analyze_image_metadata(temp_path)
-    ela_analysis = perform_ela(temp_path)
-
-    image_forensics_result = {
-        "is_forged": ela_analysis.get("is_suspicious", False) or metadata_analysis.get("risk_level") == "HIGH",
-        "ela_score": ela_analysis.get("risk_score", 0) * 20,
-        "metadata_risk": metadata_analysis.get("risk_level", "LOW"),
-        "metadata_flags": metadata_analysis.get("suspicious_flags", []),
-        "ela_reasons": ela_analysis.get("reasons", [])
-    }
-    logger.info(f"Image forensics: is_forged={image_forensics_result.get('is_forged')}, ela_score={image_forensics_result.get('ela_score', 0)}")
-
-    # ✅ COLLECT ALL PREVIOUS RECEIPTS FROM CURRENT USER'S ENROLLMENTS (FOR SAME-USER DUPLICATE CHECK)
-    all_previous_receipt_paths = []
-
-    with get_db() as dup_session:
-        current_payment_enrollment_ids = context.user_data.get("current_payment_enrollment_ids", [])
-        resubmission_enrollment_id = context.user_data.get("resubmission_enrollment_id")
-        
-        enrollment_ids_to_check = current_payment_enrollment_ids if not resubmission_enrollment_id else [resubmission_enrollment_id]
-        
-        for eid in enrollment_ids_to_check:
-            enrollment = crud.get_enrollment_by_id(dup_session, eid)
-            if enrollment and enrollment.receipt_image_path:
-                # ✅ Split comma-separated paths
-                receipt_paths = [p.strip() for p in enrollment.receipt_image_path.split(',') if p.strip()]
-                all_previous_receipt_paths.extend(receipt_paths)
-
-    logger.info(f"Checking duplicate against {len(all_previous_receipt_paths)} previous receipts from SAME user for re-submission check")
-    # Now check duplicates against ALL previous receipts
-    all_previous_receipt_paths = []
-
-    with get_db() as dup_session:
-        current_payment_enrollment_ids = context.user_data.get("current_payment_enrollment_ids", [])
-        resubmission_enrollment_id = context.user_data.get("resubmission_enrollment_id")
-        
-        enrollment_ids_to_check = current_payment_enrollment_ids if not resubmission_enrollment_id else [resubmission_enrollment_id]
-        
-        for eid in enrollment_ids_to_check:
-            enrollment = crud.get_enrollment_by_id(dup_session, eid)
-            if enrollment and enrollment.receipt_image_path:
-                # Split comma-separated paths
-                receipt_paths = enrollment.receipt_image_path.split(',')
-                # Filter out empty strings and add to list
-                all_previous_receipt_paths.extend([path.strip() for path in receipt_paths if path.strip()])
-
-    logger.info(f"Checking duplicate against {len(all_previous_receipt_paths)} previous receipts for user {telegram_user_id}")
-
-    duplicate_check_result['is_duplicate'] = False
-    duplicate_check_result['similarity_score'] = 0
-
-    duplicate_image_check = {}  # ✅ Initialize empty dict for compatibility
-
-    # ✅ If transaction ID duplicate found, get enrollment info from database
-    if duplicate_check_result.get("transaction_id_duplicate"):
-        with get_db() as dup_session:
-            # Find the original enrollment with this transaction ID
-            from database.models import Enrollment, User
-            original_enrollment = session.query(Enrollment).filter(
-                Enrollment.transaction_id == transaction_id
-            ).first()
-            
-            if original_enrollment:
-                original_user = original_enrollment.user
-                duplicate_image_check = {
-                    'original_user_name': f"{original_user.first_name or ''} {original_user.last_name or ''}".strip() or "Unknown",
-                    'original_user_username': original_user.username or "N/A",
-                    'original_telegram_id': original_user.telegram_user_id,
-                    'original_receipt_path': original_enrollment.receipt_image_path.split(',')[0] if original_enrollment.receipt_image_path else None,
-                    'match_type': 'TRANSACTION_ID',
-                    'risk_level': 'HIGH',
-                    'similarity_percentage': 100.0  # Transaction ID match = 100%
-                }
-                duplicate_check_result['is_duplicate'] = True
-                duplicate_check_result['similarity_score'] = 100.0
-                logger.warning(f"⚠️ Transaction ID duplicate: Original user = {duplicate_image_check['original_user_name']} (@{duplicate_image_check['original_user_username']})")
-            else:
-                logger.warning(f"⚠️ Transaction ID duplicate found but could not locate original enrollment")
-
-    logger.info(f"✅ Duplicate check complete (transaction ID only)")
-    # ===== CALCULATE CONSOLIDATED FRAUD SCORE =====
-    fraud_analysis = calculate_consolidated_fraud_score(
-        gemini_result,
-        image_forensics_result,
-        duplicate_check_result
-    )
-
-    logger.info(f"🎯 Fraud Analysis - Score: {fraud_analysis['fraud_score']}/100, Risk: {fraud_analysis['risk_level']}, Action: {fraud_analysis['recommendation']}")
-    logger.info(f"📋 Fraud indicators: {fraud_analysis['fraud_indicators']}")
-
-    # ==================== STEP 3: UPLOAD TO S3 ====================
     try:
-        resubmission_enrollment_id = context.user_data.get("resubmission_enrollment_id")
-        if resubmission_enrollment_id:
-            enrollment_id_for_s3 = resubmission_enrollment_id
-        else:
-            current_payment_enrollment_ids = context.user_data.get("current_payment_enrollment_ids", [])
-            enrollment_id_for_s3 = current_payment_enrollment_ids[0] if current_payment_enrollment_ids else 0
-        
-        s3_url = upload_receipt_to_s3(temp_path, internal_user_id, enrollment_id_for_s3)
-        file_path = s3_url
-        logger.info(f"✅ Receipt uploaded to S3: {s3_url}")
-        
-    except Exception as e:
-        logger.error(f"❌ S3 upload failed: {e}")
-        file_path = temp_path
-        logger.warning(f"Using local temp path as fallback: {temp_path}")
-    
-    # ==================== DECISION LOGIC ====================
-    
-    # Get enrollments to update
-    verified_courses = []
-    group_links = []
-    enrollment_ids_str = ""
-    
-    with get_db() as session:
-        resubmission_enrollment_id = context.user_data.get("resubmission_enrollment_id")
-        enrollments_to_update = []
-        
-        if resubmission_enrollment_id:
-            logger.info(f"Processing resubmission for user {telegram_user_id}, enrollment {resubmission_enrollment_id}")
-            enrollment = crud.get_enrollment_by_id(session, resubmission_enrollment_id)
-            if enrollment and enrollment.user_id == internal_user_id:
-                enrollments_to_update.append(enrollment)
-        else:
-            logger.info(f"Processing initial payment for user {telegram_user_id}")
-            current_payment_enrollment_ids = context.user_data.get("current_payment_enrollment_ids", [])
-            for eid in current_payment_enrollment_ids:
-                enrollment = crud.get_enrollment_by_id(session, eid)
-                if enrollment and enrollment.user_id == internal_user_id:
-                    enrollments_to_update.append(enrollment)
-        
-        if not enrollments_to_update:
-            logger.error(f"No enrollments found for user {telegram_user_id}")
-            await update.message.reply_text(error_message("enrollment_not_found"), reply_markup=back_to_main_keyboard())
-            log_user_action(telegram_user_id, "receipt_upload_failed", "No enrollments to update/process")
-            context.user_data["awaiting_receipt_upload"] = False
-            # Clean up temp file
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            return
-        
-        enrollment_ids_to_update = [e.enrollment_id for e in enrollments_to_update]
-        enrollment_ids_str = ', '.join(map(str, enrollment_ids_to_update))
-        # ===== STORE RECEIPT METADATA IN DATABASE =====
-        logger.info(f"💾 Storing receipt metadata for enrollments: {enrollment_ids_str}")
-        
-        for enrollment_id in enrollment_ids_to_update:
-            metadata_stored = crud.update_enrollment_receipt_metadata(
-                session,
-                enrollment_id=enrollment_id,
-                transaction_id=gemini_result.get("transaction_id"),
-                transfer_date=gemini_result.get("transfer_datetime"),
-                sender_name=gemini_result.get("sender_name") or gemini_result.get("recipient_name")
-            )
-            if metadata_stored:
-                logger.info(f"✅ Metadata stored for enrollment {enrollment_id}")
-            else:
-                logger.warning(f"⚠️ Failed to store metadata for enrollment {enrollment_id}")
-        
-        session.commit()
-        logger.info(f"💾 Receipt metadata committed to database")
-        # ==================== FRAUD ACTION: REJECT ====================
-        if fraud_analysis["recommendation"] == "REJECT":
-            logger.warning(f"Receipt REJECTED for user {telegram_user_id}: Fraud detected with score {fraud_analysis['fraud_score']}")
+        with get_db() as session:
+            # Get user and pending enrollments
+            user = crud.get_user_by_telegram_id(session, telegram_user_id)
+            if not user:
+                await processing_msg.edit_text("❌ المستخدم غير موجود.")
+                return
             
-            # Update transaction as rejected with fraud data
-            transaction = None
-            for enrollment in enrollments_to_update:
-                crud.update_enrollment_status(
-                    session,
-                    enrollment.enrollment_id,
-                    PaymentStatus.FAILED,
-                    receipt_path=file_path,
-                    admin_notes=f"FRAUD DETECTED (Score: {fraud_analysis['fraud_score']}): " + "; ".join(fraud_analysis["fraud_indicators"][:2])
-                )
-                logger.info(f"Updated enrollment {enrollment.enrollment_id} status to FAILED (fraud)")
-                
-                if not transaction:
-                    if resubmission_enrollment_id:
-                        from database.models import Transaction
-                        transaction = session.query(Transaction).filter(
-                            Transaction.enrollment_id == resubmission_enrollment_id
-                        ).order_by(Transaction.submitted_date.desc()).first()
-                        
-                        if transaction:
-                            transaction = crud.update_transaction(
-                                session,
-                                transaction.transaction_id,
-                                status=TransactionStatus.REJECTED,
-                                extracted_account=gemini_result.get("account_number"),
-                                extracted_amount=gemini_result.get("amount"),
-                                failure_reason=f"FRAUD DETECTED: " + "; ".join(fraud_analysis["fraud_indicators"]),
-                                gemini_response=str(fraud_analysis)
-                            )
-                    else:
-                        transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
-                        transaction = crud.update_transaction(
-                            session,
-                            transaction.transaction_id,
-                            status=TransactionStatus.REJECTED,
-                            extracted_account=gemini_result.get("account_number"),
-                            extracted_amount=gemini_result.get("amount"),
-                            failure_reason=f"FRAUD DETECTED: " + "; ".join(fraud_analysis["fraud_indicators"]),
-                            gemini_response=str(fraud_analysis)
-                        )
+            internal_user_id = user.user_id
             
-            session.commit()
+            # Get enrollments awaiting payment
+            selected_enrollment_ids = context.user_data.get('pending_payment_enrollments', [])
             
-            # Build detailed rejection message for user
-            rejection_msg = user_message = """
-❌ **لم يتم قبول الإيصال**
-
-عذراً، لم نتمكن من التحقق من الإيصال المرسل.
-
-سيتم مراجعته من قبل الإدارة خلال 24-48 ساعة.
-
-إذا كانت لديك أية استفسارات، يرجى التواصل مع الإدارة.
-
----
-❌ **Receipt Not Accepted**
-
-Sorry, we couldn't verify the submitted receipt.
-
-It will be reviewed by administration within 24-48 hours.
-
-If you have any questions, please contact administration.
-"""
-
+            if not selected_enrollment_ids:
+                await processing_msg.edit_text("❌ لا توجد دورات معلقة للدفع.")
+                return
             
-            await update.message.reply_text(rejection_msg, reply_markup=back_to_main_keyboard(), parse_mode='HTML')
+            enrollments = crud.get_enrollments_by_ids(session, selected_enrollment_ids)
             
-            # Send detailed admin alert with fraud analysis
-            course_names = []
-            for enrollment in enrollments_to_update:
-                if enrollment.course:
-                    course_names.append(enrollment.course.course_name)
-            course_names_str = ", ".join(course_names) if course_names else "N/A"
+            if not enrollments:
+                await processing_msg.edit_text("❌ الدورات المعلقة غير موجودة.")
+                return
             
-            admin_msg = f"""
-🚨 <b>FRAUD ALERT - Receipt Auto-Rejected</b>
-
-👤 <b>User Information:</b>
-Name: {user.first_name} {user.last_name or ''}
-Username: @{user.username or 'N/A'}
-ID: <code>{telegram_user_id}</code>
-
-🔴 <b>Fraud Score: {fraud_analysis['fraud_score']}/100</b>
-⚠️ <b>Risk Level: {fraud_analysis['risk_level']}</b>
-
-📊 <b>Fraud Indicators:</b>
-"""
-            for ind in fraud_analysis["fraud_indicators"]:
-                admin_msg += f"- {ind}\n"
+            # Calculate total amount due
+            total_amount_due = sum([
+                (e.payment_amount - (e.amount_paid or 0))
+                for e in enrollments
+            ])
             
-            # Add duplicate receipt info if detected
-            if duplicate_check_result.get("is_duplicate"):
-                admin_msg += f"\n🔄 <b>DUPLICATE RECEIPT DETECTED:</b>\n"
-                admin_msg += f"- Original Owner: {duplicate_image_check.get('original_user_name')} (@{duplicate_image_check.get('original_user_username')})\n"
-                admin_msg += f"- Original User ID: <code>{duplicate_image_check.get('original_telegram_id')}</code>\n"
-                admin_msg += f"- Similarity: {duplicate_check_result['similarity_score']:.1f}%\n"
-                admin_msg += f"- Match Type: {duplicate_image_check.get('match_type')}\n"
-                admin_msg += f"- Risk Level: {duplicate_image_check.get('risk_level')}\n"
-
+            # Download receipt
+            file_path = await validate_receipt_file(update, processing_msg)
+            if not file_path:
+                return
             
-            # Add ELA visual analysis if available
-            ela_data = fraud_analysis.get("ela_check", {})
-            if ela_data.get("suspicious_regions"):
-                admin_msg += f"\n🔍 Suspected Edited Areas:\n"
-                for region in ela_data["suspicious_regions"][:3]:
-                    admin_msg += f"- {region}\n"
+            temp_path = file_path
             
-            # Add Gemini tampering indicators if available
-            gemini_tampering = fraud_analysis.get("ai_validation", {}).get("tampering_indicators", [])
-            if gemini_tampering:
-                admin_msg += f"\n🤖 AI Detected Issues:\n"
-                for indicator in gemini_tampering[:3]:
-                    admin_msg += f"- {indicator}\n"
-            
-            admin_msg += f"""
-🔍 Checks Performed:
-{fraud_analysis.get('checks_performed', ['Fraud checks completed'])}
-
-📄 Extracted Data:
-- Account: {gemini_result.get('account_number', 'N/A')}
-- Amount: {(gemini_result.get('amount') or 0):.2f} {gemini_result.get('currency', 'SDG')}
-- Date: {gemini_result.get('date', 'N/A')}
-- Expected: {expected_amount_for_gemini:.2f} SDG
-
-🎯 Authenticity Score: {gemini_result.get('authenticity_score', 0)}/100
-
-📚 Courses: {course_names_str}
-📝 Enrollment IDs: {enrollment_ids_str}
-"""
-            
-            try:
-                # If duplicate detected, send BOTH receipts to admin
-                if duplicate_check_result.get("is_duplicate"):
-                    # Download and send ORIGINAL receipt first
-                    original_receipt_path = duplicate_image_check.get("original_receipt_path")
-                    if original_receipt_path:
-                        if original_receipt_path.startswith('https://'):
-                            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as orig_temp:
-                                orig_temp_path = orig_temp.name
-                            download_receipt_from_s3(original_receipt_path, orig_temp_path)
-                            original_photo = orig_temp_path
-                        else:
-                            original_photo = original_receipt_path
-                        
-                        # Send original receipt
-                        with open(original_photo, "rb") as f_orig:
-                            await context.bot.send_photo(
-                                chat_id=config.ADMIN_CHAT_ID,
-                                photo=f_orig,
-                                caption=f"📸 <b>ORIGINAL RECEIPT (FIRST SUBMISSION)</b>\n\nFrom: {duplicate_image_check.get('original_user_name')}\nUsername: @{duplicate_image_check.get('original_user_username')}\nTelegram ID: <code>{duplicate_image_check.get('original_telegram_id')}</code>\n\n⬇️ See next photo for duplicate attempt",
-                                parse_mode='HTML'
-                            )
-                        
-                        # Clean up original temp file
-                        if original_receipt_path.startswith('https://') and os.path.exists(original_photo):
-                            os.remove(original_photo)
-                
-                # Download current (duplicate) receipt from S3 if needed
-                if file_path.startswith('https://'):
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as download_temp:
-                        download_temp_path = download_temp.name
-                    download_receipt_from_s3(file_path, download_temp_path)
-                    photo_to_send = download_temp_path
-                else:
-                    photo_to_send = file_path
-                
-                # Send current receipt with fraud alert
-                with open(photo_to_send, "rb") as f:
-                    await context.bot.send_photo(
-                        chat_id=config.ADMIN_CHAT_ID,
-                        photo=f,
-                        caption=admin_msg[:1024],
-                        reply_markup=failed_receipt_admin_keyboard(enrollment_ids_str, telegram_user_id),
-                        parse_mode='HTML'
-                    )
-                
-                # Clean up downloaded temp file
-                if file_path.startswith('https://') and os.path.exists(photo_to_send):
-                    os.remove(photo_to_send)
-                
-                logger.info(f"Sent fraud alert to admin for user {telegram_user_id}")
-            except Exception as e:
-                logger.error(f"Failed to send admin fraud alert: {e}")
-                await send_admin_notification(context, admin_msg[:4096])
-
-            
-            # Clean up context and temp file
-            context.user_data["awaiting_receipt_upload"] = False
-            context.user_data.pop("cart_total_for_payment", None)
-            context.user_data.pop("pending_enrollment_ids_for_payment", None)
-            context.user_data.pop("current_payment_enrollment_ids", None)
-            context.user_data.pop("current_payment_total", None)
-            context.user_data.pop("resubmission_enrollment_id", None)
-            context.user_data.pop("reupload_amount", None)
-            
-            # Clean up temp file
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            
-            return
-        
-        # ==================== FRAUD ACTION: MANUAL REVIEW ====================
-        elif fraud_analysis["recommendation"] == "MANUAL_REVIEW":
-            logger.warning(f"Receipt flagged for MANUAL REVIEW for user {telegram_user_id}: Score {fraud_analysis['fraud_score']}")
-            
-            # Update as pending review
-            transaction = None
-            for enrollment in enrollments_to_update:
-                crud.update_enrollment_status(
-                    session,
-                    enrollment.enrollment_id,
-                    PaymentStatus.PENDING,
-                    receipt_path=file_path,
-                    admin_notes=f"MANUAL REVIEW REQUIRED (Score: {fraud_analysis['fraud_score']}): " + "; ".join(fraud_analysis["fraud_indicators"][:2])
-                )
-                logger.info(f"Updated enrollment {enrollment.enrollment_id} status to PENDING (manual review)")
-                
-                if not transaction:
-                    if resubmission_enrollment_id:
-                        from database.models import Transaction
-                        transaction = session.query(Transaction).filter(
-                            Transaction.enrollment_id == resubmission_enrollment_id
-                        ).order_by(Transaction.submitted_date.desc()).first()
-                        
-                        if transaction:
-                            transaction = crud.update_transaction(
-                                session,
-                                transaction.transaction_id,
-                                status=TransactionStatus.PENDING,
-                                extracted_account=gemini_result.get("account_number"),
-                                extracted_amount=gemini_result.get("amount"),
-                                failure_reason=f"FLAGGED FOR REVIEW: " + "; ".join(fraud_analysis["fraud_indicators"]),
-                                gemini_response=str(fraud_analysis)
-                            )
-                        else:
-                            transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
-                            transaction = crud.update_transaction(
-                                session,
-                                transaction.transaction_id,
-                                status=TransactionStatus.PENDING,
-                                extracted_account=gemini_result.get("account_number"),
-                                extracted_amount=gemini_result.get("amount"),
-                                failure_reason=f"FLAGGED FOR REVIEW: " + "; ".join(fraud_analysis["fraud_indicators"]),
-                                gemini_response=str(fraud_analysis)
-                            )
-                    else:
-                        transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
-                        transaction = crud.update_transaction(
-                            session,
-                            transaction.transaction_id,
-                            status=TransactionStatus.PENDING,
-                            extracted_account=gemini_result.get("account_number"),
-                            extracted_amount=gemini_result.get("amount"),
-                            failure_reason=f"FLAGGED FOR REVIEW: " + "; ".join(fraud_analysis["fraud_indicators"]),
-                            gemini_response=str(fraud_analysis)
-                        )
-            
-            session.commit()
-            
-            # Notify user about manual review
-            review_msg = f"""
-        ⏳ **قيد المراجعة**
-        تم استلام الإيصال وسيتم مراجعته من قبل الإدارة.
-        ⏱️ سيتم الرد خلال 24-48 ساعة.
-        شكراً لتفهمك.
-
-        ---
-
-        ⏳ **Under Review**
-        Receipt received and will be reviewed by administration.
-        ⏱️ You will receive a response within 24-48 hours.
-        Thank you for your patience.
-        """
-            await update.message.reply_text(review_msg, reply_markup=back_to_main_keyboard(), parse_mode='HTML')
-            
-            # Send admin notification for manual review
-            course_names = []
-            for enrollment in enrollments_to_update:
-                if enrollment.course:
-                    course_names.append(enrollment.course.course_name)
-            course_names_str = ", ".join(course_names) if course_names else "N/A"
-            
-            review_admin_msg = f"""
-        ⚠️ <b>MANUAL REVIEW REQUIRED</b>
-
-        👤 <b>User Information:</b>
-        Name: {user.first_name} {user.last_name or ''}
-        Username: @{user.username or 'N/A'}
-        ID: <code>{telegram_user_id}</code>
-
-        🟡 <b>Fraud Score: {fraud_analysis['fraud_score']}/100</b>
-        ⚠️ <b>Risk Level: {fraud_analysis['risk_level']}</b>
-
-        <b>⚠️ Warning Indicators:</b>
-        """
-            
-            for ind in fraud_analysis["fraud_indicators"]:
-                review_admin_msg += f"• {ind}\n"
-            
-            # ADD DUPLICATE DETECTION INFO
-            if duplicate_check_result.get('is_duplicate'):
-                review_admin_msg += f"\n<b>🚨 DUPLICATE RECEIPT DETECTED</b>\n"
-                review_admin_msg += f"• <b>Original Owner:</b> {duplicate_image_check.get('original_user_name')} (@{duplicate_image_check.get('original_user_username')})\n"
-                review_admin_msg += f"• <b>Original User ID:</b> <code>{duplicate_image_check.get('original_telegram_id')}</code>\n"
-                review_admin_msg += f"• <b>Similarity:</b> {duplicate_check_result.get('similarity_score', 0):.1f}%\n"
-                review_admin_msg += f"• <b>Match Type:</b> {duplicate_image_check.get('match_type')}\n"
-                review_admin_msg += f"• <b>Risk Level:</b> {duplicate_image_check.get('risk_level')}\n"
-            
-            review_admin_msg += f"""
-        📄 <b>Extracted Data:</b>
-        • Account: {gemini_result.get('account_number', 'N/A')}
-        • Amount: {(gemini_result.get('amount') or 0):.2f} {gemini_result.get('currency', 'SDG')}
-        • Expected: {expected_amount_for_gemini:.2f} SDG
-
-        📚 <b>Courses:</b> {course_names_str}
-        📝 <b>Enrollment IDs:</b> {enrollment_ids_str}
-
-        🔍 <b>Action Required:</b> Please review and approve/reject manually.
-        """
-            
-            try:
-                # If duplicate detected, send BOTH receipts
-                if duplicate_check_result.get("is_duplicate"):
-                    # Download and send ORIGINAL receipt first
-                    original_receipt_path = duplicate_image_check.get("original_receipt_path")
-                    if original_receipt_path:
-                        if original_receipt_path.startswith('https://'):
-                            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as orig_temp:
-                                orig_temp_path = orig_temp.name
-                            download_receipt_from_s3(original_receipt_path, orig_temp_path)
-                            original_photo = orig_temp_path
-                        else:
-                            original_photo = original_receipt_path
-                        
-                        # Send original receipt
-                        with open(original_photo, "rb") as f_orig:
-                            await context.bot.send_photo(
-                                chat_id=config.ADMIN_CHAT_ID,
-                                photo=f_orig,
-                                caption=f"📸 <b>ORIGINAL RECEIPT</b>\n\n👤 Original Owner: {duplicate_image_check.get('original_user_name')}\n🆔 User ID: <code>{duplicate_image_check.get('original_telegram_id')}</code>\n\n⬇️ See next photo for duplicate attempt",
-                                parse_mode='HTML'
-                            )
-                        
-                        # Clean up original temp file
-                        if original_receipt_path.startswith('https://') and os.path.exists(original_photo):
-                            os.remove(original_photo)
-                
-                # Download current (duplicate or normal) receipt from S3 if needed
-                if file_path.startswith('https://'):
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as download_temp:
-                        download_temp_path = download_temp.name
-                    download_receipt_from_s3(file_path, download_temp_path)
-                    photo_to_send = download_temp_path
-                else:
-                    photo_to_send = file_path
-                
-                with open(photo_to_send, "rb") as f:
-                    await context.bot.send_photo(
-                        chat_id=config.ADMIN_CHAT_ID,
-                        photo=f,
-                        caption=review_admin_msg[:1024],
-                        reply_markup=failed_receipt_admin_keyboard(enrollment_ids_str, telegram_user_id),
-                        parse_mode='HTML'
-                    )
-                
-                # Clean up downloaded temp file
-                if file_path.startswith('https://') and os.path.exists(photo_to_send):
-                    os.remove(photo_to_send)
-                
-                logger.info(f"Sent manual review request to admin for user {telegram_user_id}")
-            except Exception as e:
-                logger.error(f"Failed to send admin review request: {e}")
-                await send_admin_notification(context, review_admin_msg[:4096])
-            
-            # Clean up context and temp file
-            context.user_data["awaiting_receipt_upload"] = False
-            context.user_data.pop("cart_total_for_payment", None)
-            context.user_data.pop("pending_enrollment_ids_for_payment", None)
-            context.user_data.pop("current_payment_enrollment_ids", None)
-            context.user_data.pop("current_payment_total", None)
-            context.user_data.pop("resubmission_enrollment_id", None)
-            context.user_data.pop("reupload_amount", None)
-            
-            # Clean up temp file
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            
-            return
-        
-        # ==================== FRAUD ACTION: APPROVE ====================
-        # Low fraud score - proceed with normal validation
-        result = gemini_result  # Use Gemini result for final validation
-        extracted_amount = result.get("amount", 0)
-        
-        # ✅ CHECK FOR PARTIAL PAYMENT (amount is less but everything else is correct)
-        # Allow 5 SDG tolerance
-        if result["is_valid"] and extracted_amount < (expected_amount_for_gemini - 5):
-            # PARTIAL PAYMENT DETECTED
-            remaining_total = expected_amount_for_gemini - extracted_amount
-            logger.info(f"⚠️ Partial payment detected for user {telegram_user_id}: paid {extracted_amount:.0f}, expected {expected_amount_for_gemini:.0f}, remaining {remaining_total:.0f}")
-            
-            # Get course names for notifications
-            course_names = []
-            for enrollment in enrollments_to_update:
-                if enrollment.course:
-                    course_names.append(enrollment.course.course_name)
-            course_names_str = ", ".join(course_names) if course_names else "N/A"
-            
-            # ✅ CALCULATE REMAINING BALANCE FOR EACH ENROLLMENT
-            enrollment_remaining_balances = []
-            total_remaining_needed = 0
-            
-            for enrollment in enrollments_to_update:
-                current_paid = enrollment.amount_paid or 0
-                remaining_for_this = enrollment.payment_amount - current_paid
-                enrollment_remaining_balances.append({
-                    'enrollment': enrollment,
-                    'remaining': remaining_for_this
-                })
-                total_remaining_needed += remaining_for_this
-            
-            logger.info(f"Total remaining needed across all enrollments: {total_remaining_needed:.2f}")
-            
-            # ✅ DISTRIBUTE PAYMENT PROPORTIONALLY ACROSS ENROLLMENTS
-            transaction = None
-            remaining_to_distribute = extracted_amount
-            
-            for idx, item in enumerate(enrollment_remaining_balances):
-                enrollment = item['enrollment']
-                enrollment_remaining = item['remaining']
-                
-                # Calculate proportional amount
-                if idx == len(enrollment_remaining_balances) - 1:
-                    amount_for_this_enrollment = remaining_to_distribute
-                else:
-                    proportion = enrollment_remaining / total_remaining_needed
-                    amount_for_this_enrollment = extracted_amount * proportion
-                    remaining_to_distribute -= amount_for_this_enrollment
-                
-                # Apply payment
-                current_paid = enrollment.amount_paid or 0
-                enrollment.amount_paid = current_paid + amount_for_this_enrollment
-                
-                # Check if complete
-                if enrollment.amount_paid >= enrollment.payment_amount:
-                    enrollment.payment_status = PaymentStatus.VERIFIED
-                    enrollment.verification_date = datetime.now()
-                    logger.info(f"✅ Full payment reached for enrollment {enrollment.enrollment_id}")
-                else:
-                    enrollment.payment_status = PaymentStatus.PENDING
-                    logger.info(f"⚠️ Still partial for enrollment {enrollment.enrollment_id}")
-                
-                # Store receipt path
-                existing_receipts = enrollment.receipt_image_path
-                
-                if existing_receipts:
-                    enrollment.receipt_image_path = existing_receipts + "," + file_path
-                else:
-                    enrollment.receipt_image_path = file_path
-                
-                logger.info(f"📝 Updated receipt path for enrollment {enrollment.enrollment_id}")
-            
-                # ✅ FLUSH ONCE after loop ends (OUTDENTED - same level as 'for')
-            session.flush()
-            logger.info(f"💾 Committed all {len(enrollment_remaining_balances)} enrollment updates to database")
-                
-            # Create/update transaction
-            if not transaction:
-                    if resubmission_enrollment_id:
-                        from database.models import Transaction
-                        transaction = session.query(Transaction).filter(
-                            Transaction.enrollment_id == resubmission_enrollment_id
-                        ).order_by(Transaction.submitted_date.desc()).first()
-                        
-                        if transaction:
-                            transaction = crud.update_transaction(
-                                session,
-                                transaction.transaction_id,
-                                status=TransactionStatus.PENDING,
-                                extracted_account=result.get("account_number"),
-                                extracted_amount=extracted_amount,
-                                failure_reason=f"Partial payment: {extracted_amount:.0f}/{expected_amount_for_gemini:.0f} SDG. Remaining: {remaining_total:.0f} SDG",
-                                gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}"
-                            )
-                        else:
-                            transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
-                            transaction = crud.update_transaction(
-                                session,
-                                transaction.transaction_id,
-                                status=TransactionStatus.PENDING,
-                                extracted_account=result.get("account_number"),
-                                extracted_amount=extracted_amount,
-                                failure_reason=f"Partial payment: {extracted_amount:.0f}/{expected_amount_for_gemini:.0f} SDG. Remaining: {remaining_total:.0f} SDG",
-                                gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}"
-                            )
-                    else:
-                        transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
-                        transaction = crud.update_transaction(
-                            session,
-                            transaction.transaction_id,
-                            status=TransactionStatus.PENDING,
-                            extracted_account=result.get("account_number"),
-                            extracted_amount=extracted_amount,
-                            failure_reason=f"Partial payment: {extracted_amount:.0f}/{expected_amount_for_gemini:.0f} SDG. Remaining: {remaining_total:.0f} SDG",
-                            gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}"
-                        )
-            
-            # ✅ COMMIT CHANGES BEFORE CHECKING
-            session.commit()
-            
-            # ✅ NOW CHECK IF ALL ENROLLMENTS ARE VERIFIED
-            all_verified = all(e.payment_status == PaymentStatus.VERIFIED for e in enrollments_to_update)
-            
-            if all_verified:
-                # PAYMENT COMPLETE! Send group invites ONLY (no redundant success message)
-                logger.info(f"✅ Payment completed for user {telegram_user_id}")
-                
-                from handlers.group_registration import send_course_invite_link
-                
-                # ✅ DELETE PROCESSING MESSAGE FIRST
-                try:
-                    if update.message:
-                        await update.message.delete()
-                except Exception as e:
-                    logger.warning(f"Could not delete processing message: {e}")
-                
-                # Send group invites (this function sends its own message with the link)
-                for e in enrollments_to_update:
-                    if e.course:
-                        await send_course_invite_link(update, context, telegram_user_id, e.course.course_id)
-                
-                # Clean up context
-                context.user_data["awaiting_receipt_upload"] = False
-                context.user_data.pop("cart_total_for_payment", None)
-                context.user_data.pop("pending_enrollment_ids_for_payment", None)
-                context.user_data.pop("current_payment_enrollment_ids", None)
-                context.user_data.pop("current_payment_total", None)
-                context.user_data.pop("resubmission_enrollment_id", None)
-                context.user_data.pop("reupload_amount", None)
-                
-                # Clean up temp file
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-                
-                return  # Exit - payment complete!
-            
-            # ELSE: Still partial - send partial payment notification with breakdown
-            partial_message = (
-                f"⚠️ **المبلغ المدفوع ناقص**\n"
-                f"💰 **المبلغ المدفوع:** {extracted_amount:.0f} SDG\n"
-                f"✅ تم التحقق من الإيصال\n\n"
-                f"📊 **توزيع الدفع:**\n"
+            # ===== GEMINI AI VALIDATION =====
+            logger.info(f"Starting Gemini validation for user {telegram_user_id}")
+            gemini_result = await validate_receipt_with_gemini_ai(
+                temp_path,
+                total_amount_due,
+                config.EXPECTED_ACCOUNTS
             )
             
-            # Show breakdown for each course
-            for item in enrollment_remaining_balances:
-                enrollment = item['enrollment']
-                course_name = enrollment.course.course_name if enrollment.course else "Unknown"
-                current_paid = enrollment.amount_paid or 0
-                total_price = enrollment.payment_amount
-                remaining = total_price - current_paid
-                
-                partial_message += f"• {course_name}: {current_paid:.0f}/{total_price:.0f} SDG"
-                if remaining > 0:
-                    partial_message += f" (متبقي: {remaining:.0f})\n"
-                else:
-                    partial_message += f" ✅ مكتمل\n"
+            logger.info(f"Gemini validation result: is_valid={gemini_result.get('is_valid')}, amount={gemini_result.get('amount')}, tx_id={gemini_result.get('transaction_id')}")
             
-            partial_message += (
-                f"\n📊 **المبلغ المطلوب:** {expected_amount_for_gemini:.0f} SDG\n"
-                f"⚠️ **المبلغ المتبقي:** {remaining_total:.0f} SDG\n\n"
-                f"📝 **لإكمال الدفع:**\n"
-                f"1️⃣ اذهب إلى **دوراتي** من القائمة الرئيسية\n"
-                f"2️⃣ اختر الدورة\n"
-                f"3️⃣ اضغط **إكمال الدفع** وأرسل إيصال المبلغ المتبقي\n\n"
-                f"✅ سيتم تفعيل التسجيل بعد استلام المبلغ الكامل"
-            )
+            # ===== FRAUD DETECTION SETUP =====
+            logger.info(f"Starting enhanced fraud detection for user {telegram_user_id}")
             
-            await update.message.reply_text(
-                partial_message,
-                reply_markup=back_to_main_keyboard(),
-                parse_mode='Markdown'
-            )
+            # Initialize fraud detection components
+            duplicate_check_result = {
+                "transaction_id_duplicate": False,
+                "duplicate_transaction_id": None,
+                "is_duplicate": False,
+                "similarity_score": 0
+            }
             
-            # Send admin notification
-            admin_partial_msg = f"""
-        ⚠️ PARTIAL PAYMENT RECEIVED
-
-        👤 User: {user.first_name} {user.last_name or ''}
-        🆔 ID: {telegram_user_id}
-
-        💰 Paid: {extracted_amount:.0f} SDG
-        📊 Required: {expected_amount_for_gemini:.0f} SDG
-        ⚠️ Remaining: {remaining:.0f} SDG
-
-        📚 Courses: {course_names_str}
-        📝 Enrollment IDs: {enrollment_ids_str}
-
-        ✅ Account verified: {result.get('account_number')}
-        🟢 Fraud score: {fraud_analysis['fraud_score']}/100
-
-        ⏳ Waiting for remaining payment...
-        """
+            transaction_id = gemini_result.get("transaction_id")
             
-            try:
-                # Download from S3 if needed
-                if file_path.startswith('https://'):
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as download_temp:
-                        download_temp_path = download_temp.name
-                    download_receipt_from_s3(file_path, download_temp_path)
-                    photo_to_send = download_temp_path
-                else:
-                    photo_to_send = file_path
-                
-                with open(photo_to_send, "rb") as f:
-                    await context.bot.send_photo(
-                        chat_id=config.ADMIN_CHAT_ID,
-                        photo=f,
-                        caption=admin_partial_msg[:1024],
-                        parse_mode='HTML'
-                    )
-                
-                if file_path.startswith('https://') and os.path.exists(photo_to_send):
-                    os.remove(photo_to_send)
-            except Exception as e:
-                logger.error(f"Failed to send admin notification: {e}")
-            
-            # Clean up context
-            context.user_data["awaiting_receipt_upload"] = False
-            context.user_data.pop("cart_total_for_payment", None)
-            context.user_data.pop("pending_enrollment_ids_for_payment", None)
-            context.user_data.pop("current_payment_enrollment_ids", None)
-            context.user_data.pop("current_payment_total", None)
-            context.user_data.pop("resubmission_enrollment_id", None)
-            context.user_data.pop("reupload_amount", None)
-            
-            # Clean up temp file
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            
-            return  # ✅ STOP HERE for partial payment
-        
-        # ✅ CONTINUE WITH FULL PAYMENT (existing logic)
-        transaction = None
-        for enrollment in enrollments_to_update:
-            payment_status = PaymentStatus.VERIFIED if result["is_valid"] else PaymentStatus.FAILED
-            
-            # ✅ If verified, set amount_paid to full amount
-            if result["is_valid"]:
-                enrollment.amount_paid = enrollment.payment_amount
-            
-            # ✅ APPEND RECEIPT PATH (don't overwrite)
-            existing_receipts = enrollment.receipt_image_path
-            if existing_receipts:
-                new_receipt_path = existing_receipts + "," + file_path
-            else:
-                new_receipt_path = file_path
-            
-            crud.update_enrollment_status(
-                session,
-                enrollment.enrollment_id,
-                payment_status,
-                receipt_path=new_receipt_path,  # ✅ USE APPENDED PATH
-                admin_notes=result.get("reason") if not result["is_valid"] else f"Fraud score: {fraud_analysis['fraud_score']}"
-            )
-            
-            logger.info(f"📝 Updated receipt path for enrollment {enrollment.enrollment_id}: {new_receipt_path}")
-            
-            if not transaction:
-                if resubmission_enrollment_id:
-                    from database.models import Transaction
-                    transaction = session.query(Transaction).filter(
-                        Transaction.enrollment_id == resubmission_enrollment_id
-                    ).order_by(Transaction.submitted_date.desc()).first()
+            # ✅ CHECK TRANSACTIONS TABLE (not Enrollments) for duplicate transaction ID
+            with get_db() as dup_session:
+                if transaction_id:
+                    from database.models import Transaction as TransactionModel
                     
-                    if transaction:
-                        transaction = crud.update_transaction(
-                            session,
-                            transaction.transaction_id,
-                            status=TransactionStatus.APPROVED if result["is_valid"] else TransactionStatus.REJECTED,
-                            extracted_account=result.get("account_number"),
-                            extracted_amount=result.get("amount"),
-                            failure_reason=result.get("reason", ""),
-                            gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}"
-                        )
-                        logger.info(f"Updated transaction {transaction.transaction_id}")
+                    duplicate_transaction = dup_session.query(TransactionModel).filter(
+                        TransactionModel.receipt_transaction_id == transaction_id,
+                        TransactionModel.status == TransactionStatus.APPROVED  # Only check APPROVED
+                    ).first()
+                    
+                    if duplicate_transaction:
+                        duplicate_check_result["transaction_id_duplicate"] = True
+                        duplicate_check_result["duplicate_transaction_id"] = transaction_id
+                        duplicate_check_result["duplicate_enrollment_id"] = duplicate_transaction.enrollment_id
+                        logger.warning(f"⚠️ Duplicate transaction ID detected: {transaction_id} (transaction #{duplicate_transaction.transaction_id}, enrollment #{duplicate_transaction.enrollment_id})")
                     else:
-                        transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
-                        transaction = crud.update_transaction(
-                            session,
-                            transaction.transaction_id,
-                            status=TransactionStatus.APPROVED if result["is_valid"] else TransactionStatus.REJECTED,
-                            extracted_account=result.get("account_number"),
-                            extracted_amount=result.get("amount"),
-                            failure_reason=result.get("reason", ""),
-                            gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}"
-                        )
-                        logger.info(f"Created new transaction {transaction.transaction_id}")
+                        logger.info(f"✅ Transaction ID is unique: {transaction_id}")
                 else:
-                    transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
+                    logger.warning(f"⚠️ No transaction ID extracted from receipt")
+            
+            # ===== IMAGE FORENSICS =====
+            from services.image_forensics import analyze_image_authenticity
+            logger.info("Running image forensics analysis...")
+            forensics_result = analyze_image_authenticity(temp_path)
+            logger.info(f"Image forensics: is_forged={forensics_result.get('is_forged')}, ela_score={forensics_result.get('ela_score')}")
+            
+            # ❌ REMOVED: Image duplicate checking (too slow)
+            # Instead, prepare duplicate info from transaction ID check only
+            duplicate_image_check = {}  # ✅ Initialize empty dict for compatibility
+            
+            # ✅ Get duplicate info from Transaction table (not Enrollment)
+            if duplicate_check_result.get("transaction_id_duplicate"):
+                with get_db() as dup_session:
+                    from database.models import Transaction as TransactionModel, Enrollment, User
+                    
+                    # ✅ Find the original transaction with this receipt_transaction_id
+                    original_transaction = dup_session.query(TransactionModel).filter(
+                        TransactionModel.receipt_transaction_id == transaction_id,
+                        TransactionModel.status == TransactionStatus.APPROVED
+                    ).first()
+                    
+                    if original_transaction:
+                        original_enrollment = original_transaction.enrollment
+                        original_user = original_enrollment.user
+                        duplicate_image_check = {
+                            'original_user_name': f"{original_user.first_name or ''} {original_user.last_name or ''}".strip() or "Unknown",
+                            'original_user_username': original_user.username or "N/A",
+                            'original_telegram_id': original_user.telegram_user_id,
+                            'original_receipt_path': original_transaction.receipt_image_path,
+                            'original_transaction_date': original_transaction.receipt_transfer_date,
+                            'original_sender_name': original_transaction.receipt_sender_name,
+                            'original_amount': original_transaction.receipt_amount,
+                            'match_type': 'TRANSACTION_ID',
+                            'risk_level': 'HIGH',
+                            'similarity_percentage': 100.0
+                        }
+                        duplicate_check_result['is_duplicate'] = True
+                        duplicate_check_result['similarity_score'] = 100.0
+                        logger.warning(f"⚠️ Transaction ID {transaction_id} already used by {duplicate_image_check['original_user_name']} (@{duplicate_image_check['original_user_username']}) on {original_transaction.receipt_transfer_date}")
+                    else:
+                        logger.warning(f"⚠️ Transaction ID duplicate flag set but original transaction not found")
+            
+            logger.info(f"✅ Duplicate check complete (transaction ID only)")
+            
+            # ===== CONSOLIDATED FRAUD SCORE =====
+            fraud_analysis = calculate_consolidated_fraud_score(
+                gemini_result,
+                forensics_result,
+                duplicate_check_result
+            )
+            
+            logger.info(f"🎯 Fraud Analysis - Score: {fraud_analysis['fraud_score']}/100, Risk: {fraud_analysis['risk_level']}, Action: {fraud_analysis['recommendation']}")
+            logger.info(f"📋 Fraud indicators: {fraud_analysis['fraud_indicators']}")
+            
+            # ===== DECISION LOGIC =====
+            extracted_amount = gemini_result.get("amount", 0)
+            
+            # Upload to S3 first
+            s3_url = upload_receipt_to_s3(temp_path, internal_user_id, selected_enrollment_ids[0])
+            logger.info(f"✅ Receipt uploaded to S3: {s3_url}")
+            
+            # ===== HIGH FRAUD SCORE - AUTO REJECT =====
+            if fraud_analysis['recommendation'] == "REJECT":
+                logger.warning(f"🚨 FRAUD DETECTED - Auto-rejecting receipt for user {telegram_user_id}")
+                
+                # Create/update transaction record
+                for enrollment_id in selected_enrollment_ids:
+                    transaction = crud.create_transaction(session, enrollment_id, s3_url)
                     transaction = crud.update_transaction(
                         session,
                         transaction.transaction_id,
-                        status=TransactionStatus.APPROVED if result["is_valid"] else TransactionStatus.REJECTED,
-                        extracted_account=result.get("account_number"),
-                        extracted_amount=result.get("amount"),
-                        failure_reason=result.get("reason", ""),
-                        gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}"
+                        status=TransactionStatus.REJECTED,
+                        extracted_account=gemini_result.get("account_number"),
+                        extracted_amount=gemini_result.get("amount"),
+                        # ✅ NEW: Store receipt metadata
+                        receipt_transaction_id=gemini_result.get("transaction_id"),
+                        receipt_transfer_date=gemini_result.get("transfer_datetime"),
+                        receipt_sender_name=gemini_result.get("sender_name") or gemini_result.get("recipient_name"),
+                        receipt_amount=gemini_result.get("amount"),
+                        failure_reason=f"FRAUD DETECTED: " + "; ".join(fraud_analysis["fraud_indicators"]),
+                        gemini_response=gemini_result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}"
                     )
-                    logger.info(f"Created transaction {transaction.transaction_id}")
-        
-        if result["is_valid"]:
-            course_data_list = []
-            group_links_list = []
-            
-            # Import the group invitation function
-            from handlers.group_registration import send_course_invite_link
-            
-            for e in enrollments_to_update:
-                if e.payment_status == PaymentStatus.VERIFIED:
-                    course = e.course
-                    if course:
-                        # Extract data immediately while in session
-                        course_data_list.append({
-                            'course_id': course.course_id,
-                            'course_name': course.course_name
-                        })
-                        
-                        # Send course group invite link (auto-fetches if missing)
-                        await send_course_invite_link(update, context, telegram_user_id, course.course_id)
-                        
-                        # Also keep for backwards compatibility in success message
-                        if course.telegram_group_link:
-                            group_links_list.append(course.telegram_group_link)
-            if not resubmission_enrollment_id:
-                crud.clear_user_cart(session, internal_user_id)
-                logger.info(f"Cleared cart for user {telegram_user_id}")
-            
-            session.commit()
-    
-    # ==================== USER NOTIFICATIONS ====================
-    
-    if result["is_valid"]:
-        logger.info(f"Payment SUCCESS for user {telegram_user_id}, enrollments: {enrollment_ids_str}, Fraud Score: {fraud_analysis['fraud_score']}")
-        
-        # ✅ DELETE PROCESSING MESSAGE FIRST
-        try:
-            if update.message:
-                await update.message.delete()
-        except Exception as e:
-            logger.warning(f"Could not delete processing message: {e}")
-        
-        # ✅ NO redundant success message - send_course_invite_link already sent the success message with group link
-        
-        log_user_action(telegram_user_id, "payment_success", f"enrollment_ids={enrollment_ids_str}, fraud_score={fraud_analysis['fraud_score']}")
-    else:
-        logger.warning(f"Payment FAILED for user {telegram_user_id}: {result.get('reason')}, Fraud Score: {fraud_analysis['fraud_score']}")
-        
-        # Send user notification
-        await update.message.reply_text(
-            payment_failed_message(result.get("reason", "Invalid receipt.")),
-            reply_markup=back_to_main_keyboard(),
-            parse_mode='HTML'
-        )
-        
-        # Send admin notification with receipt image
-        extracted_account = result.get('account_number', 'N/A')
-        extracted_amount = result.get('amount', 0)
-        extracted_currency = result.get('currency', 'SDG')
-        
-        # Get course names for admin notification
-        course_names = []
-        with get_db() as temp_session:
-            for eid in enrollment_ids_to_update:
-                enrollment = crud.get_enrollment_by_id(temp_session, eid)
-                if enrollment and enrollment.course:
-                    course_names.append(enrollment.course.course_name)
-        course_names_str = ", ".join(course_names) if course_names else "N/A"
-        
-        admin_caption = f"""
-🔴 Receipt Validation Failed
+                
+                session.commit()
+                
+                await processing_msg.edit_text(
+                    f"❌ تم رفض الإيصال\n\n"
+                    f"⚠️ تم اكتشاف مشاكل في الإيصال:\n"
+                    f"• {chr(10).join(fraud_analysis['fraud_indicators'][:3])}\n\n"
+                    f"يرجى إرسال إيصال صحيح.",
+                    reply_markup=back_to_main_keyboard()
+                )
+                
+                log_user_action(telegram_user_id, "payment_fraud_rejected", f"Score: {fraud_analysis['fraud_score']}")
+                return
+            # ===== MEDIUM FRAUD SCORE - MANUAL REVIEW =====
+            elif fraud_analysis['recommendation'] == "MANUAL_REVIEW":
+                logger.warning(f"⚠️ FLAGGED FOR REVIEW - User {telegram_user_id}, Fraud Score: {fraud_analysis['fraud_score']}")
+                
+                # Create/update transaction records
+                for enrollment_id in selected_enrollment_ids:
+                    transaction = crud.create_transaction(session, enrollment_id, s3_url)
+                    transaction = crud.update_transaction(
+                        session,
+                        transaction.transaction_id,
+                        status=TransactionStatus.PENDING,
+                        extracted_account=gemini_result.get("account_number"),
+                        extracted_amount=gemini_result.get("amount"),
+                        # ✅ NEW: Store receipt metadata
+                        receipt_transaction_id=gemini_result.get("transaction_id"),
+                        receipt_transfer_date=gemini_result.get("transfer_datetime"),
+                        receipt_sender_name=gemini_result.get("sender_name") or gemini_result.get("recipient_name"),
+                        receipt_amount=gemini_result.get("amount"),
+                        failure_reason=f"FLAGGED FOR REVIEW: " + "; ".join(fraud_analysis["fraud_indicators"]),
+                        gemini_response=gemini_result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}"
+                    )
+                
+                session.commit()
+                
+                # Notify admin
+                admin_message = f"""
+🔍 **PAYMENT NEEDS REVIEW**
 
 👤 User: {user.first_name} {user.last_name or ''}
-Username: @{user.username or 'N/A'}
-ID: {telegram_user_id}
+   @{user.username or 'N/A'}
+   ID: {telegram_user_id}
 
-📄 Extracted Data:
-• Account: {extracted_account}
-• Amount: {gemini_result.get('amount') or 0:.2f} {gemini_result.get('currency', 'SDG')}
-• Expected: {expected_amount_for_gemini:.2f} SDG
+💰 Amount: {extracted_amount:.0f} SDG (Expected: {total_amount_due:.0f} SDG)
 
-🟢 Fraud Score: {fraud_analysis['fraud_score']}/100 (LOW RISK)
+⚠️ **Fraud Score: {fraud_analysis['fraud_score']}/100 ({fraud_analysis['risk_level']})**
 
-❌ Validation Issue:
-{result.get('reason', 'Validation failed')[:150]}...
+🚨 Fraud Indicators:
+{chr(10).join(['• ' + ind for ind in fraud_analysis['fraud_indicators']])}
 
-📚 Courses: {course_names_str}
-📝 Enrollment IDs: {enrollment_ids_str}
+📋 Transaction Details:
+• TxID: {transaction_id or 'N/A'}
+• Date: {gemini_result.get('date', 'N/A')}
+• Sender: {gemini_result.get('sender_name', 'N/A')}
 
-⚠️ Action Required: Manual review recommended
+🎓 Courses ({len(enrollments)}):
+{chr(10).join(['• ' + e.course.course_name for e in enrollments])}
+
+📸 Receipt: {s3_url}
+"""
+                
+                await send_admin_notification(
+                    context.bot,
+                    admin_message,
+                    reply_markup=failed_receipt_admin_keyboard(transaction.transaction_id)
+                )
+                
+                await processing_msg.edit_text(
+                    "✅ تم استلام الإيصال\n\n"
+                    "⏳ يتم حالياً مراجعة الإيصال من قبل الإدارة.\n"
+                    "سيتم إعلامك بالنتيجة قريباً.",
+                    reply_markup=back_to_main_keyboard()
+                )
+                
+                log_user_action(telegram_user_id, "payment_manual_review", f"Score: {fraud_analysis['fraud_score']}")
+                return
+            
+            # ===== LOW FRAUD SCORE - AUTO APPROVE =====
+            else:  # recommendation == "ACCEPT"
+                logger.info(f"✅ LOW FRAUD - Auto-approving receipt for user {telegram_user_id}")
+                
+                # Process initial payment
+                logger.info(f"Processing initial payment for user {telegram_user_id}")
+                
+                # Store receipt metadata for ALL enrollments
+                logger.info(f"💾 Storing receipt metadata for enrollments: {', '.join(map(str, selected_enrollment_ids))}")
+                
+                for enrollment_id in selected_enrollment_ids:
+                    enrollment = crud.get_enrollment_by_id(session, enrollment_id)
+                    
+                    if not enrollment:
+                        continue
+                    
+                    # ✅ Update enrollment with receipt metadata
+                    enrollment.receipt_transaction_id = transaction_id
+                    enrollment.receipt_transfer_date = gemini_result.get("transfer_datetime")
+                    enrollment.receipt_sender_name = gemini_result.get("sender_name") or gemini_result.get("recipient_name")
+                    
+                    logger.info(f"✅ Metadata stored for enrollment {enrollment_id}")
+                
+                logger.info(f"💾 Receipt metadata committed to database")
+                
+                # Calculate individual enrollment amounts (proportional split)
+                total_remaining = sum([(e.payment_amount - (e.amount_paid or 0)) for e in enrollments])
+                
+                course_data_list = []
+                group_links = []
+                
+                for enrollment in enrollments:
+                    remaining_for_enrollment = enrollment.payment_amount - (enrollment.amount_paid or 0)
+                    proportion = remaining_for_enrollment / total_remaining if total_remaining > 0 else 0
+                    payment_for_this_enrollment = extracted_amount * proportion
+                    
+                    # Update amount paid
+                    enrollment.amount_paid = (enrollment.amount_paid or 0) + payment_for_this_enrollment
+                    
+                    # Update receipt path (append if multiple)
+                    if enrollment.receipt_image_path:
+                        enrollment.receipt_image_path += f",{s3_url}"
+                    else:
+                        enrollment.receipt_image_path = s3_url
+                    
+                    logger.info(f"📝 Updated receipt path for enrollment {enrollment.enrollment_id}: {enrollment.receipt_image_path}")
+                    
+                    # Create transaction record
+                    transaction = crud.create_transaction(session, enrollment.enrollment_id, s3_url)
+                    logger.info(f"Created transaction {transaction.transaction_id}")
+                    
+                    transaction = crud.update_transaction(
+                        session,
+                        transaction.transaction_id,
+                        status=TransactionStatus.APPROVED,
+                        extracted_account=gemini_result.get("account_number"),
+                        extracted_amount=payment_for_this_enrollment,
+                        # ✅ NEW: Store receipt metadata
+                        receipt_transaction_id=gemini_result.get("transaction_id"),
+                        receipt_transfer_date=gemini_result.get("transfer_datetime"),
+                        receipt_sender_name=gemini_result.get("sender_name") or gemini_result.get("recipient_name"),
+                        receipt_amount=payment_for_this_enrollment,
+                        gemini_response=gemini_result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}"
+                    )
+                    
+                    # Check if fully paid
+                    remaining_total = enrollment.payment_amount - enrollment.amount_paid
+                    
+                    if remaining_total <= 0.01:  # Fully paid
+                        enrollment.payment_status = PaymentStatus.VERIFIED
+                        enrollment.verification_date = datetime.utcnow()
+                        logger.info(f"✅ Enrollment {enrollment.enrollment_id} FULLY PAID ({enrollment.amount_paid:.0f} SDG)")
+                        
+                        # Generate group invite link
+                        from handlers.group_registration import send_group_invite_link
+                        group_link = await send_group_invite_link(context, user, enrollment.course)
+                        
+                        course_data_list.append({
+                            'name': enrollment.course.course_name,
+                            'course_name': enrollment.course.course_name,
+                            'telegram_group_link': group_link
+                        })
+                        group_links.append(group_link)
+                    else:
+                        enrollment.payment_status = PaymentStatus.PENDING
+                        logger.info(f"⚠️ Enrollment {enrollment.enrollment_id} PARTIALLY PAID: {enrollment.amount_paid:.0f}/{enrollment.payment_amount:.0f} SDG (remaining: {remaining_total:.0f} SDG)")
+                        
+                        course_data_list.append({
+                            'name': enrollment.course.course_name,
+                            'course_name': enrollment.course.course_name,
+                            'status': 'partial',
+                            'paid': enrollment.amount_paid,
+                            'remaining': remaining_total
+                        })
+                
+                session.commit()
+                
+                # Clear cart
+                context.user_data.pop('pending_payment_enrollments', None)
+                logger.info(f"Cleared cart for user {telegram_user_id}")
+                
+                # Send success message
+                success_text = payment_success_message(course_data_list, group_links)
+                await processing_msg.edit_text(
+                    success_text,
+                    reply_markup=back_to_main_keyboard()
+                )
+                
+                logger.info(f"Payment SUCCESS for user {telegram_user_id}, enrollments: {', '.join(map(str, selected_enrollment_ids))}, Fraud Score: {fraud_analysis['fraud_score']}")
+                log_user_action(telegram_user_id, "payment_success", f"enrollment_ids={','.join(map(str, selected_enrollment_ids))}, fraud_score={fraud_analysis['fraud_score']}")
+                
+                # Send admin notification
+                fully_paid = [e for e in enrollments if (e.payment_amount - e.amount_paid) <= 0.01]
+                partially_paid = [e for e in enrollments if (e.payment_amount - e.amount_paid) > 0.01]
+                
+                admin_notif = f"""
+✅ **AUTO-APPROVED PAYMENT**
+
+👤 User: {user.first_name} {user.last_name or ''}
+   @{user.username or 'N/A'}
+   ID: {telegram_user_id}
+
+💰 Amount Paid: {extracted_amount:.0f} SDG
+
+🎯 **Fraud Score: {fraud_analysis['fraud_score']}/100 ({fraud_analysis['risk_level']} RISK)**
+✅ Auto-approved (low fraud indicators)
+
+📋 Transaction Details:
+• TxID: {transaction_id or 'N/A'}
+• Date: {gemini_result.get('date', 'N/A')}
+• Sender: {gemini_result.get('sender_name', 'N/A')}
+
+🎓 Courses:
+"""
+                if fully_paid:
+                    admin_notif += "\n✅ **Fully Paid:**\n"
+                    for e in fully_paid:
+                        admin_notif += f"• {e.course.course_name} - {e.amount_paid:.0f} SDG\n"
+                
+                if partially_paid:
+                    admin_notif += "\n⚠️ **Partially Paid:**\n"
+                    for e in partially_paid:
+                        remaining_total = e.payment_amount - e.amount_paid
+                        admin_notif += f"• {e.course.course_name} - Paid: {e.amount_paid:.0f}/{e.payment_amount:.0f} SDG\n"
+                        admin_notif += f"  ⚠️ Remaining: {remaining_total:.0f} SDG\n"
+                
+                admin_notif += f"\n📸 Receipt: {s3_url}"
+                
+                await send_admin_notification(context.bot, admin_notif)
+                
+                return
+    
+    except Exception as e:
+        logger.error(f"Payment processing error: {e}", exc_info=True)
+        try:
+            await processing_msg.edit_text(
+                f"❌ حدث خطأ في معالجة الإيصال:\n{str(e)}\n\nيرجى المحاولة مرة أخرى.",
+                reply_markup=back_to_main_keyboard()
+            )
+        except:
+            pass
+    
+    finally:
+        # Cleanup temp file
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+                logger.info(f"Cleaned up temp file: {temp_path}")
+            except:
+                pass
+async def select_courses_for_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Allow user to select which pending enrollments to pay for
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    telegram_user_id = query.from_user.id
+    
+    with get_db() as session:
+        user = crud.get_user_by_telegram_id(session, telegram_user_id)
+        
+        if not user:
+            await query.edit_message_text("❌ المستخدم غير موجود.")
+            return
+        
+        # Get all pending enrollments
+        pending_enrollments = crud.get_user_enrollments_by_status(
+            session,
+            user.user_id,
+            PaymentStatus.PENDING
+        )
+        
+        if not pending_enrollments:
+            await query.edit_message_text(
+                "✅ لا توجد دورات معلقة تحتاج دفع.\n\nجميع دوراتك مدفوعة!",
+                reply_markup=back_to_main_keyboard()
+            )
+            return
+        
+        # Initialize selection state
+        if 'payment_selection' not in context.user_data:
+            context.user_data['payment_selection'] = {
+                'selected_enrollment_ids': [],
+                'total': 0.0
+            }
+        
+        # Build selection keyboard
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        
+        keyboard = []
+        selected_ids = context.user_data['payment_selection']['selected_enrollment_ids']
+        
+        for enrollment in pending_enrollments:
+            remaining = enrollment.payment_amount - (enrollment.amount_paid or 0)
+            
+            if remaining <= 0:
+                continue
+            
+            # Check if selected
+            is_selected = enrollment.enrollment_id in selected_ids
+            check_mark = "✅ " if is_selected else ""
+            
+            button_text = f"{check_mark}{enrollment.course.course_name} - {remaining:.0f} جنيه"
+            callback_data = f"toggle_payment_{enrollment.enrollment_id}"
+            
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+        
+        # Add control buttons
+        if selected_ids:
+            total = sum([
+                (e.payment_amount - (e.amount_paid or 0))
+                for e in pending_enrollments
+                if e.enrollment_id in selected_ids
+            ])
+            
+            keyboard.append([
+                InlineKeyboardButton(f"✅ متابعة الدفع ({total:.0f} جنيه)", callback_data="proceed_to_payment"),
+                InlineKeyboardButton("🔄 إلغاء الاختيار", callback_data="clear_payment_selection")
+            ])
+        
+        keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="back_to_main")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        message_text = "📝 اختر الدورات التي تريد دفعها:\n\n"
+        
+        if selected_ids:
+            message_text += f"✓ محدد: {len(selected_ids)} دورة\n"
+            total = sum([
+                (e.payment_amount - (e.amount_paid or 0))
+                for e in pending_enrollments
+                if e.enrollment_id in selected_ids
+            ])
+            message_text += f"💰 المجموع: {total:.0f} جنيه\n\n"
+        
+        message_text += "اضغط على الدورة لإضافتها أو إزالتها"
+        
+        await query.edit_message_text(
+            message_text,
+            reply_markup=reply_markup
+        )
+
+
+async def toggle_payment_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Toggle enrollment selection for payment
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    # Extract enrollment_id from callback data
+    enrollment_id = int(query.data.split('_')[-1])
+    
+    # Initialize selection state if not exists
+    if 'payment_selection' not in context.user_data:
+        context.user_data['payment_selection'] = {
+            'selected_enrollment_ids': [],
+            'total': 0.0
+        }
+    
+    selected_ids = context.user_data['payment_selection']['selected_enrollment_ids']
+    
+    # Toggle selection
+    if enrollment_id in selected_ids:
+        selected_ids.remove(enrollment_id)
+    else:
+        selected_ids.append(enrollment_id)
+    
+    # Refresh the selection screen
+    await select_courses_for_payment(update, context)
+
+
+async def clear_payment_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Clear all payment selections
+    """
+    query = update.callback_query
+    await query.answer("تم مسح الاختيار")
+    
+    if 'payment_selection' in context.user_data:
+        context.user_data['payment_selection'] = {
+            'selected_enrollment_ids': [],
+            'total': 0.0
+        }
+    
+    # Refresh the selection screen
+    await select_courses_for_payment(update, context)
+
+
+async def view_my_courses(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    View user's enrolled courses with payment status
+    """
+    query = update.callback_query if update.callback_query else None
+    
+    if query:
+        await query.answer()
+    
+    telegram_user_id = update.effective_user.id
+    
+    with get_db() as session:
+        user = crud.get_user_by_telegram_id(session, telegram_user_id)
+        
+        if not user:
+            text = "❌ المستخدم غير موجود."
+            if query:
+                await query.edit_message_text(text)
+            else:
+                await update.message.reply_text(text)
+            return
+        
+        # Get all enrollments
+        enrollments = crud.get_user_enrollments(session, user.user_id)
+        
+        if not enrollments:
+            text = "📋 لا توجد دورات مسجلة\n\nسجل في الدورات من القائمة الرئيسية."
+            if query:
+                await query.edit_message_text(text, reply_markup=back_to_main_keyboard())
+            else:
+                await update.message.reply_text(text, reply_markup=back_to_main_keyboard())
+            return
+        
+        # Categorize enrollments
+        verified = [e for e in enrollments if e.payment_status == PaymentStatus.VERIFIED]
+        pending = [e for e in enrollments if e.payment_status == PaymentStatus.PENDING]
+        failed = [e for e in enrollments if e.payment_status == PaymentStatus.FAILED]
+        
+        message = "📋 **دوراتي:**\n\n"
+        
+        if verified:
+            message += "✅ **الدورات المفعلة:**\n"
+            for e in verified:
+                message += f"• {e.course.course_name}\n"
+                if e.course.telegram_group_link:
+                    message += f"  🔗 [رابط المجموعة]({e.course.telegram_group_link})\n"
+            message += "\n"
+        
+        if pending:
+            message += "⏳ **قيد المراجعة / تحتاج دفع:**\n"
+            for e in pending:
+                remaining = e.payment_amount - (e.amount_paid or 0)
+                if remaining > 0:
+                    paid_text = f" (مدفوع: {e.amount_paid:.0f} جنيه)" if e.amount_paid else ""
+                    message += f"• {e.course.course_name} - {remaining:.0f} جنيه متبقي{paid_text}\n"
+                else:
+                    message += f"• {e.course.course_name} - قيد المراجعة\n"
+            message += "\n"
+        
+        if failed:
+            message += "❌ **تحتاج إعادة محاولة:**\n"
+            for e in failed:
+                message += f"• {e.course.course_name}\n"
+            message += "\n"
+        
+        # Build keyboard
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        
+        keyboard = []
+        
+        # Check if there are pending payments
+        pending_with_balance = [e for e in pending if (e.payment_amount - (e.amount_paid or 0)) > 0]
+        
+        if pending_with_balance:
+            keyboard.append([
+                InlineKeyboardButton("💳 دفع الآن", callback_data="select_courses_for_payment")
+            ])
+        
+        keyboard.append([InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="back_to_main")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if query:
+            await query.edit_message_text(message, reply_markup=reply_markup, parse_mode='Markdown')
+        else:
+            await update.message.reply_text(message, reply_markup=reply_markup, parse_mode='Markdown')
+
+
+async def retry_failed_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Allow user to retry a failed payment
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    # Extract enrollment_id from callback data
+    enrollment_id = int(query.data.split('_')[-1])
+    
+    telegram_user_id = query.from_user.id
+    
+    with get_db() as session:
+        user = crud.get_user_by_telegram_id(session, telegram_user_id)
+        enrollment = crud.get_enrollment_by_id(session, enrollment_id)
+        
+        if not enrollment or enrollment.user_id != user.user_id:
+            await query.edit_message_text("❌ التسجيل غير موجود.")
+            return
+        
+        # Reset status to pending
+        enrollment.payment_status = PaymentStatus.PENDING
+        session.commit()
+        
+        # Set this enrollment for payment
+        context.user_data['pending_payment_enrollments'] = [enrollment_id]
+        
+        remaining = enrollment.payment_amount - (enrollment.amount_paid or 0)
+        
+        # Send payment instructions
+        instructions_text = payment_instructions_message(remaining)
+        
+        await query.edit_message_text(
+            instructions_text,
+            reply_markup=payment_upload_keyboard()
+        )
+    
+    log_user_action(telegram_user_id, "retry_failed_payment", f"enrollment_id={enrollment_id}")
+
+
+async def view_payment_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    View user's payment transaction history
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    telegram_user_id = query.from_user.id
+    
+    with get_db() as session:
+        user = crud.get_user_by_telegram_id(session, telegram_user_id)
+        
+        if not user:
+            await query.edit_message_text("❌ المستخدم غير موجود.")
+            return
+        
+        # Get all enrollments with transactions
+        from database.models import Transaction as TransactionModel
+        
+        transactions = session.query(TransactionModel).join(
+            TransactionModel.enrollment
+        ).filter(
+            TransactionModel.enrollment.has(user_id=user.user_id)
+        ).order_by(TransactionModel.submitted_date.desc()).limit(10).all()
+        
+        if not transactions:
+            await query.edit_message_text(
+                "📋 لا توجد معاملات سابقة.",
+                reply_markup=back_to_main_keyboard()
+            )
+            return
+        
+        message = "📋 **سجل المعاملات:**\n\n"
+        
+        for tx in transactions:
+            status_emoji = {
+                TransactionStatus.APPROVED: "✅",
+                TransactionStatus.PENDING: "⏳",
+                TransactionStatus.REJECTED: "❌"
+            }.get(tx.status, "❓")
+            
+            message += f"{status_emoji} **{tx.enrollment.course.course_name}**\n"
+            message += f"   المبلغ: {tx.extracted_amount:.0f} جنيه\n"
+            message += f"   التاريخ: {tx.submitted_date.strftime('%Y-%m-%d %H:%M')}\n"
+            message += f"   الحالة: {tx.status.value}\n\n"
+        
+        await query.edit_message_text(
+            message,
+            reply_markup=back_to_main_keyboard(),
+            parse_mode='Markdown'
+        )
+async def cancel_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Cancel ongoing payment process
+    """
+    query = update.callback_query
+    await query.answer("تم إلغاء العملية")
+    
+    # Clear payment context
+    context.user_data.pop('pending_payment_enrollments', None)
+    context.user_data.pop('payment_selection', None)
+    
+    from handlers.menu_handlers import show_main_menu
+    await show_main_menu(update, context)
+
+
+async def request_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Request support from admin
+    """
+    query = update.callback_query if update.callback_query else None
+    
+    if query:
+        await query.answer()
+    
+    telegram_user_id = update.effective_user.id
+    
+    support_message = """
+📞 **الدعم الفني**
+
+للحصول على المساعدة:
+
+1️⃣ راسل الإدارة: @AdminUsername
+2️⃣ أرسل رسالة توضح مشكلتك
+3️⃣ سيتم الرد عليك في أقرب وقت
+
+💡 **الأسئلة الشائعة:**
+
+❓ لم يتم قبول الإيصال؟
+• تأكد من وضوح الصورة
+• تحقق من رقم الحساب الصحيح
+• تأكد من المبلغ المحول
+
+❓ الإيصال قيد المراجعة؟
+• سيتم مراجعته خلال 24 ساعة
+• ستصلك رسالة بالنتيجة
+
+❓ كيف أتحقق من حالة التسجيل؟
+• اضغط على "دوراتي" من القائمة الرئيسية
+"""
+    
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    
+    keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="back_to_main")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if query:
+        await query.edit_message_text(support_message, reply_markup=reply_markup, parse_mode='Markdown')
+    else:
+        await update.message.reply_text(support_message, reply_markup=reply_markup, parse_mode='Markdown')
+    
+    log_user_action(telegram_user_id, "request_support", "User requested support")
+
+
+# ===== ADMIN HANDLERS FOR PAYMENT APPROVAL/REJECTION =====
+
+async def admin_approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Admin approves a payment transaction
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    # Extract transaction_id from callback data
+    transaction_id = int(query.data.split('_')[-1])
+    
+    admin_user_id = query.from_user.id
+    
+    with get_db() as session:
+        from database.models import Transaction as TransactionModel
+        
+        transaction = session.query(TransactionModel).filter(
+            TransactionModel.transaction_id == transaction_id
+        ).first()
+        
+        if not transaction:
+            await query.edit_message_text("❌ Transaction not found.")
+            return
+        
+        enrollment = transaction.enrollment
+        user = enrollment.user
+        
+        # Update transaction status
+        transaction.status = TransactionStatus.APPROVED
+        transaction.admin_reviewed_by = admin_user_id
+        transaction.admin_review_date = datetime.utcnow()
+        
+        # ✅ UPDATE amount_paid
+        payment_amount = transaction.receipt_amount or transaction.extracted_amount or 0
+        enrollment.amount_paid = (enrollment.amount_paid or 0) + payment_amount
+        
+        logger.info(f"✅ Admin approved: enrollment {enrollment.enrollment_id}, added {payment_amount} SDG, total: {enrollment.amount_paid}/{enrollment.payment_amount}")
+        
+        # Check if fully paid
+        remaining = enrollment.payment_amount - enrollment.amount_paid
+        
+        if remaining <= 0.01:  # Fully paid
+            enrollment.payment_status = PaymentStatus.VERIFIED
+            enrollment.verification_date = datetime.utcnow()
+            
+            # Append receipt path if not already there
+            if transaction.receipt_image_path not in (enrollment.receipt_image_path or ""):
+                if enrollment.receipt_image_path:
+                    enrollment.receipt_image_path += f",{transaction.receipt_image_path}"
+                else:
+                    enrollment.receipt_image_path = transaction.receipt_image_path
+            
+            session.commit()
+            
+            # Send group invite to user
+            from handlers.group_registration import send_group_invite_link
+            group_link = await send_group_invite_link(context, user, enrollment.course)
+            
+            # Notify user
+            user_message = f"""
+✅ **تم قبول الدفع!**
+
+تم التحقق من إيصال الدفع بنجاح.
+
+🎓 **الدورة:** {enrollment.course.course_name}
+💰 **المبلغ:** {payment_amount:.0f} جنيه سوداني
+✅ **الحالة:** مدفوع بالكامل
+
+🔗 **رابط المجموعة:**
+{group_link}
+
+مبروك! يمكنك الآن الوصول إلى الدورة.
+"""
+            
+            await context.bot.send_message(
+                chat_id=user.telegram_user_id,
+                text=user_message,
+                parse_mode='Markdown'
+            )
+            
+            await query.edit_message_text(
+                f"✅ **APPROVED**\n\n"
+                f"Transaction #{transaction_id} approved.\n"
+                f"User: {user.first_name} (@{user.username or 'N/A'})\n"
+                f"Course: {enrollment.course.course_name}\n"
+                f"Amount: {payment_amount:.0f} SDG\n"
+                f"Status: **FULLY PAID** ({enrollment.amount_paid:.0f} SDG)\n\n"
+                f"User has been notified and granted access.",
+                parse_mode='Markdown'
+            )
+            
+            log_user_action(admin_user_id, "admin_approve_payment", f"transaction_id={transaction_id}, enrollment_id={enrollment.enrollment_id}, fully_paid")
+        
+        else:  # Partially paid
+            enrollment.payment_status = PaymentStatus.PENDING
+            session.commit()
+            
+            # Notify user
+            user_message = f"""
+✅ **تم قبول الدفع الجزئي!**
+
+تم التحقق من إيصال الدفع بنجاح.
+
+🎓 **الدورة:** {enrollment.course.course_name}
+💰 **المبلغ المدفوع:** {payment_amount:.0f} جنيه سوداني
+📊 **الإجمالي:** {enrollment.amount_paid:.0f}/{enrollment.payment_amount:.0f} جنيه
+⚠️ **المتبقي:** {remaining:.0f} جنيه سوداني
+
+لإكمال التسجيل، يرجى دفع المبلغ المتبقي.
+"""
+            
+            await context.bot.send_message(
+                chat_id=user.telegram_user_id,
+                text=user_message,
+                parse_mode='Markdown'
+            )
+            
+            await query.edit_message_text(
+                f"✅ **PARTIALLY APPROVED**\n\n"
+                f"Transaction #{transaction_id} approved.\n"
+                f"User: {user.first_name} (@{user.username or 'N/A'})\n"
+                f"Course: {enrollment.course.course_name}\n"
+                f"Amount: {payment_amount:.0f} SDG\n"
+                f"Paid: {enrollment.amount_paid:.0f}/{enrollment.payment_amount:.0f} SDG\n"
+                f"⚠️ **Remaining:** {remaining:.0f} SDG\n\n"
+                f"User has been notified to pay remaining amount.",
+                parse_mode='Markdown'
+            )
+            
+            log_user_action(admin_user_id, "admin_approve_payment", f"transaction_id={transaction_id}, enrollment_id={enrollment.enrollment_id}, partial_payment")
+
+
+async def admin_reject_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Admin rejects a payment transaction
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    # Extract transaction_id from callback data
+    transaction_id = int(query.data.split('_')[-1])
+    
+    admin_user_id = query.from_user.id
+    
+    with get_db() as session:
+        from database.models import Transaction as TransactionModel
+        
+        transaction = session.query(TransactionModel).filter(
+            TransactionModel.transaction_id == transaction_id
+        ).first()
+        
+        if not transaction:
+            await query.edit_message_text("❌ Transaction not found.")
+            return
+        
+        enrollment = transaction.enrollment
+        user = enrollment.user
+        
+        # Update transaction status
+        transaction.status = TransactionStatus.REJECTED
+        transaction.admin_reviewed_by = admin_user_id
+        transaction.admin_review_date = datetime.utcnow()
+        
+        # Update enrollment status
+        enrollment.payment_status = PaymentStatus.FAILED
+        
+        session.commit()
+        
+        # Notify user
+        user_message = f"""
+❌ **تم رفض الإيصال**
+
+عذراً، لم يتم قبول إيصال الدفع.
+
+🎓 **الدورة:** {enrollment.course.course_name}
+
+⚠️ **السبب:**
+{transaction.failure_reason or 'لم يتم التحقق من الإيصال'}
+
+📝 **الإجراء المطلوب:**
+• تحقق من رقم الحساب الصحيح
+• تأكد من وضوح الصورة
+• قم بإرسال إيصال جديد من "دوراتي"
+
+للمساعدة، تواصل مع الإدارة.
 """
         
-        try:
-            # Download from S3 if needed
-            if file_path.startswith('https://'):
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as download_temp:
-                    download_temp_path = download_temp.name
-                download_receipt_from_s3(file_path, download_temp_path)
-                photo_to_send = download_temp_path
-            else:
-                photo_to_send = file_path
-            
-            with open(photo_to_send, "rb") as f:
-                await context.bot.send_photo(
-                    chat_id=config.ADMIN_CHAT_ID,
-                    photo=f,
-                    caption=admin_caption,
-                    reply_markup=failed_receipt_admin_keyboard(enrollment_ids_str, telegram_user_id),
-                    parse_mode='HTML'
-                )
-            
-            # Clean up downloaded temp file
-            if file_path.startswith('https://') and os.path.exists(photo_to_send):
-                os.remove(photo_to_send)
-            
-            logger.info(f"Sent admin notification with image for user {telegram_user_id}")
-        except Exception as e:
-            logger.error(f"Failed to send admin notification for user {telegram_user_id}: {e}")
-            await send_admin_notification(
-                context,
-                f"Receipt validation failed for user {telegram_user_id}. File: {file_path}"
-            )
-    
-    # Clean up context data
-    context.user_data["awaiting_receipt_upload"] = False
-    context.user_data.pop("cart_total_for_payment", None)
-    context.user_data.pop("pending_enrollment_ids_for_payment", None)
-    context.user_data.pop("current_payment_enrollment_ids", None)
-    context.user_data.pop("current_payment_total", None)
-    context.user_data.pop("resubmission_enrollment_id", None)
-    context.user_data.pop("reupload_amount", None)
-    
-    # Clean up temporary file
-    try:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-            logger.info(f"Cleaned up temp file: {temp_path}")
-    except Exception as e:
-        logger.warning(f"Failed to clean up temp file {temp_path}: {e}")
+        await context.bot.send_message(
+            chat_id=user.telegram_user_id,
+            text=user_message,
+            parse_mode='Markdown'
+        )
+        
+        await query.edit_message_text(
+            f"❌ **REJECTED**\n\n"
+            f"Transaction #{transaction_id} rejected.\n"
+            f"User: {user.first_name} (@{user.username or 'N/A'})\n"
+            f"Course: {enrollment.course.course_name}\n\n"
+            f"User has been notified.",
+            parse_mode='Markdown'
+        )
+        
+        log_user_action(admin_user_id, "admin_reject_payment", f"transaction_id={transaction_id}, enrollment_id={enrollment.enrollment_id}")
+
+
+# ===== EXPORTS =====
+
+__all__ = [
+    'proceed_to_payment_callback',
+    'handle_payment_receipt',
+    'select_courses_for_payment',
+    'toggle_payment_selection',
+    'clear_payment_selection',
+    'view_my_courses',
+    'retry_failed_payment',
+    'view_payment_history',
+    'cancel_payment',
+    'request_support',
+    'admin_approve_payment',
+    'admin_reject_payment',
+]

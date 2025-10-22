@@ -218,20 +218,28 @@ def create_transaction(session: Session, enrollment_id: int,
     session.flush()
     return transaction
 
-def update_transaction(session: Session, transaction_id: int, 
-                      status: str = None,
-                      extracted_account: str = None, 
-                      extracted_amount: float = None,
-                      failure_reason: str = None, 
-                      gemini_response: str = None,
-                      admin_id: int = None) -> Optional[Transaction]:
+def update_transaction(
+    session: Session, 
+    transaction_id: int, 
+    status: str = None, 
+    extracted_account: str = None, 
+    extracted_amount: float = None, 
+    # ✅ NEW PARAMETERS
+    receipt_transaction_id: str = None,
+    receipt_transfer_date: datetime = None,
+    receipt_sender_name: str = None,
+    receipt_amount: float = None,
+    # Existing parameters
+    failure_reason: str = None, 
+    gemini_response: str = None, 
+    admin_id: int = None
+) -> Optional[Transaction]:
     """Update transaction - accepts string and converts to enum"""
     transaction = session.query(Transaction).filter(
         Transaction.transaction_id == transaction_id
     ).first()
     
     if transaction:
-        # Convert string status to TransactionStatus enum
         if status:
             if isinstance(status, str):
                 status = status.lower()  # Convert to lowercase for TransactionStatus
@@ -243,11 +251,22 @@ def update_transaction(session: Session, transaction_id: int,
                     transaction.status = TransactionStatus.PENDING
             else:
                 transaction.status = status
-                
+        
         if extracted_account:
             transaction.extracted_account_number = extracted_account
         if extracted_amount is not None:
             transaction.extracted_amount = extracted_amount
+        
+        # ✅ NEW: Update receipt metadata
+        if receipt_transaction_id:
+            transaction.receipt_transaction_id = receipt_transaction_id
+        if receipt_transfer_date:
+            transaction.receipt_transfer_date = receipt_transfer_date
+        if receipt_sender_name:
+            transaction.receipt_sender_name = receipt_sender_name
+        if receipt_amount is not None:
+            transaction.receipt_amount = receipt_amount
+        
         if failure_reason:
             transaction.failure_reason = failure_reason
         if gemini_response:
@@ -255,10 +274,11 @@ def update_transaction(session: Session, transaction_id: int,
         if admin_id:
             transaction.admin_reviewed_by = admin_id
             transaction.admin_review_date = datetime.now()
-            
+        
         session.flush()
     
     return transaction
+
 
 def get_pending_transactions(session: Session) -> List[Transaction]:
     return session.query(Transaction).filter(
