@@ -162,8 +162,8 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
         logger.warning(f"   Match type: {duplicate_image_check.get('match_type')}")
         
         # Add high fraud contribution for duplicates
-        duplicate_check_result["fraud_contribution"] = 40
-        logger.info(f"⚠️ Duplicate detected - adding 40 points to fraud score")
+        duplicate_check_result["fraud_contribution"] = 55
+        logger.info(f"⚠️ Duplicate detected - adding 55 points to fraud score")
     else:
         duplicate_check_result["fraud_contribution"] = 0
     # ===== IMAGE FORENSICS ANALYSIS =====
