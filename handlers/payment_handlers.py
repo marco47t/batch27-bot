@@ -1057,14 +1057,16 @@ ID: <code>{telegram_user_id}</code>
     if result["is_valid"]:
         logger.info(f"Payment SUCCESS for user {telegram_user_id}, enrollments: {enrollment_ids_str}, Fraud Score: {fraud_analysis['fraud_score']}")
         
-        await update.message.reply_text(
-            payment_success_message(course_data_list, group_links_list),
-            reply_markup=back_to_main_keyboard(),
-            parse_mode='HTML'
-        )
+        # ✅ DELETE PROCESSING MESSAGE FIRST
+        try:
+            if update.message:
+                await update.message.delete()
+        except Exception as e:
+            logger.warning(f"Could not delete processing message: {e}")
+        
+        # ✅ NO redundant success message - send_course_invite_link already sent the success message with group link
         
         log_user_action(telegram_user_id, "payment_success", f"enrollment_ids={enrollment_ids_str}, fraud_score={fraud_analysis['fraud_score']}")
-        
     else:
         logger.warning(f"Payment FAILED for user {telegram_user_id}: {result.get('reason')}, Fraud Score: {fraud_analysis['fraud_score']}")
         

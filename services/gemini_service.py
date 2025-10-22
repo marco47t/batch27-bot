@@ -156,7 +156,13 @@ Return ONLY the JSON object.
             
             # Generate response
             logger.debug(f"Sending to Gemini: {image_path}")
-            response = model.generate_content([prompt, image])
+            # Run Gemini in thread pool to avoid blocking
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,  # Use default ThreadPoolExecutor
+                lambda: model.generate_content([prompt, image])
+            )
+
             response_text = response.text.strip()
             
             # Clean response
