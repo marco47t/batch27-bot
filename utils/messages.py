@@ -96,11 +96,9 @@ def course_detail_message(course, enrollment_count: int = 0) -> str:
     registration_info = ""
     if course.registration_open_date or course.registration_close_date:
         registration_info = "\n\n📅 فترة التسجيل / Registration Period:"
-        
         if course.registration_open_date:
             reg_open_str = course.registration_open_date.strftime('%Y-%m-%d')
             registration_info += f"\n🟢 يفتح / Opens: {reg_open_str}"
-            
             # Check if registration is open yet
             if datetime.now() < course.registration_open_date:
                 registration_info += " (قريباً / Coming Soon)"
@@ -108,7 +106,6 @@ def course_detail_message(course, enrollment_count: int = 0) -> str:
         if course.registration_close_date:
             reg_close_str = course.registration_close_date.strftime('%Y-%m-%d')
             registration_info += f"\n🔴 يغلق / Closes: {reg_close_str}"
-            
             # Check if registration has closed
             if datetime.now() > course.registration_close_date:
                 registration_info += " (مغلق / Closed)"
@@ -117,14 +114,18 @@ def course_detail_message(course, enrollment_count: int = 0) -> str:
     course_period_info = ""
     if course.start_date or course.end_date:
         course_period_info = "\n\n📚 مدة الدورة / Course Duration:"
-        
         if course.start_date:
             start_str = course.start_date.strftime('%Y-%m-%d')
             course_period_info += f"\n▶️ البداية / Start: {start_str}"
-        
         if course.end_date:
             end_str = course.end_date.strftime('%Y-%m-%d')
             course_period_info += f"\n🏁 النهاية / End: {end_str}"
+    
+    # ✅ FIX: Show actual group link or clear message
+    if course.telegram_group_link:
+        group_link_text = f"🔗 رابط المجموعة: {course.telegram_group_link}"
+    else:
+        group_link_text = "🔗 رابط المجموعة: سيتم إرساله بعد تأكيد الدفع"
     
     return f"""
 📖 تفاصيل الدورة
@@ -135,27 +136,39 @@ def course_detail_message(course, enrollment_count: int = 0) -> str:
 
 💰 السعر: {course.price:.0f} جنيه سوداني{capacity_info}{registration_info}{course_period_info}
 
-🔗 رابط المجموعة: {course.telegram_group_link or 'سيتم توفيره بعد التسجيل'}
+{group_link_text}
 """
 
 
 def receipt_processing_message() -> str:
     return "⏳ جاري معالجة الإيصال...\n\nيرجى الانتظار بينما نتحقق من الدفع..."
 
-def payment_success_message(courses_data, group_links=None):
-    """Generate payment success message with course list"""
-    message = "✅ <b>تم قبول الدفعة بنجاح!</b>\n\n"
-    message += "<b>الدورات المسجلة:</b>\n"
+def payment_success_message(course_data_list: List[dict], group_links_list: List[str] = None) -> str:
+    """Payment verified successfully with course details and group links"""
+    if not course_data_list:
+        return "✅ تم التحقق من الدفع بنجاح!"
     
-    for idx, course in enumerate(courses_data, 1):
-        message += f"{idx}. {course['course_name']}\n"
+    message = "✅ تم التحقق من الدفع بنجاح!\n\n✅ تم تأكيد تسجيلك في:\n\n"
     
-    if group_links:
-        message += "\n🔗 <b>روابط المجموعات:</b>\n"
-        for link in group_links:
-            message += f"• {link}\n"
+    for idx, course_data in enumerate(course_data_list):
+        # ✅ FIX: Extract course name properly
+        course_name = course_data.get('course_name', course_data.get('name', 'Unknown'))
+        message += f"🎓 {course_name}\n"
+        
+        # ✅ FIX: Try to get group link from course_data first
+        group_link = None
+        if 'telegram_group_link' in course_data and course_data['telegram_group_link']:
+            group_link = course_data['telegram_group_link']
+        elif group_links_list and idx < len(group_links_list) and group_links_list[idx]:
+            group_link = group_links_list[idx]
+        
+        if group_link:
+            message += f"🔗 رابط المجموعة: {group_link}\n"
+        
+        message += "\n"
     
-    message += "\nشكراً لك! 🎉"
+    message += "🎉 مبروك! يمكنك الآن الوصول إلى الدورات من قسم \"دوراتي\""
+    
     return message
 
 def payment_failed_message(reason: str) -> str:

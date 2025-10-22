@@ -667,7 +667,6 @@ ID: <code>{telegram_user_id}</code>
         if result["is_valid"] and extracted_amount < (expected_amount_for_gemini - 5):
             # PARTIAL PAYMENT DETECTED
             remaining = expected_amount_for_gemini - extracted_amount
-            
             logger.info(f"⚠️ Partial payment detected for user {telegram_user_id}: paid {extracted_amount:.0f}, expected {expected_amount_for_gemini:.0f}, remaining {remaining:.0f}")
             
             # Get course names for notifications
@@ -683,7 +682,7 @@ ID: <code>{telegram_user_id}</code>
                 current_paid = enrollment.amount_paid or 0
                 enrollment.amount_paid = current_paid + extracted_amount
                 
-                # ✅ CHECK IF PAYMENT IS NOW COMPLETE
+                # ✅ CHECK IF THIS ENROLLMENT IS NOW COMPLETE
                 if enrollment.amount_paid >= enrollment.payment_amount:
                     # FULL PAYMENT REACHED - Mark as VERIFIED
                     enrollment.payment_status = PaymentStatus.VERIFIED
@@ -694,47 +693,9 @@ ID: <code>{telegram_user_id}</code>
                     enrollment.payment_status = PaymentStatus.PENDING
                     logger.info(f"⚠️ Still partial for enrollment {enrollment.enrollment_id}: {enrollment.amount_paid:.0f}/{enrollment.payment_amount:.0f}")
                 
-                session.commit()
-
-                # Check if payment is now complete
-                all_verified = all(e.payment_status == PaymentStatus.VERIFIED for e in enrollments_to_update)
-
-                if all_verified:
-                    # PAYMENT COMPLETE - Send success message instead of partial payment message
-                    logger.info(f"✅ Payment completed for user {telegram_user_id}")
-                    
-                    # Import group invitation
-                    from handlers.group_registration import send_course_invite_link
-                    
-                    course_data_list = []
-                    for e in enrollments_to_update:
-                        if e.course:
-                            course_data_list.append({
-                                'course_id': e.course.course_id,
-                                'course_name': e.course.course_name
-                            })
-                            # Send course invite
-                            await send_course_invite_link(update, context, telegram_user_id, e.course.course_id)
-                    
-                    # Send success message
-                    await update.message.reply_text(
-                        payment_success_message(course_data_list, []),
-                        reply_markup=back_to_main_keyboard(),
-                        parse_mode='HTML'
-                    )
-                    
-                    # Clean up context
-                    context.user_data["awaiting_receipt_upload"] = False
-                    # ... rest of cleanup
-                    
-                    return  # Exit early - payment complete!
-
-                # ELSE: Still partial - send partial payment message (existing logic)
-                remaining = expected_amount_for_gemini - extracted_amount
-
-
                 enrollment.receipt_image_path = file_path
                 session.flush()
+                
                 # Create/update transaction
                 if not transaction:
                     if resubmission_enrollment_id:
@@ -776,21 +737,65 @@ ID: <code>{telegram_user_id}</code>
                             gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}"
                         )
             
+            # ✅ COMMIT CHANGES BEFORE CHECKING
             session.commit()
             
+            # ✅ NOW CHECK IF ALL ENROLLMENTS ARE VERIFIED
+            all_verified = all(e.payment_status == PaymentStatus.VERIFIED for e in enrollments_to_update)
+            
+            if all_verified:
+                # PAYMENT COMPLETE! Send success message + group invites
+                logger.info(f"✅ Payment completed for user {telegram_user_id}")
+                
+                from handlers.group_registration import send_course_invite_link
+                
+                course_data_list = []
+                for e in enrollments_to_update:
+                    if e.course:
+                        course_data_list.append({
+                            'course_id': e.course.course_id,
+                            'course_name': e.course.course_name
+                        })
+                        # Send course invite
+                        await send_course_invite_link(update, context, telegram_user_id, e.course.course_id)
+                
+                # Send success message
+                await update.message.reply_text(
+                    payment_success_message(course_data_list, []),
+                    reply_markup=back_to_main_keyboard(),
+                    parse_mode='HTML'
+                )
+                
+                # Clean up context
+                context.user_data["awaiting_receipt_upload"] = False
+                context.user_data.pop("cart_total_for_payment", None)
+                context.user_data.pop("pending_enrollment_ids_for_payment", None)
+                context.user_data.pop("current_payment_enrollment_ids", None)
+                context.user_data.pop("current_payment_total", None)
+                context.user_data.pop("resubmission_enrollment_id", None)
+                context.user_data.pop("reupload_amount", None)
+                
+                # Clean up temp file
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                
+                return  # Exit - payment complete!
+            
+            # ELSE: Still partial - send partial payment notification
             # Notify user about partial payment
             partial_message = (
                 f"⚠️ **المبلغ المدفوع ناقص**\n"
                 f"💰 **المبلغ المدفوع:** {extracted_amount:.0f} SDG\n"
                 f"✅ تم التحقق من الإيصال\n"
                 f"📊 **المبلغ المطلوب:** {expected_amount_for_gemini:.0f} SDG\n"
-                f"⚠️ **المبلغ المتبقي:** {remaining:.0f} SDG\n"
+                f"⚠️ **المبلغ المتبقي:** {remaining:.0f} SDG\n\n"
                 f"📝 **لإكمال الدفع:**\n"
                 f"1️⃣ اذهب إلى **دوراتي** من القائمة الرئيسية\n"
                 f"2️⃣ اضغط على الدورة\n"
-                f"3️⃣ اضغط **إكمال الدفع** وأرسل إيصال المبلغ المتبقي\n"
-                f"✅ سيتم تفعيل التسجيل بعد استلام المبلغ الكامل\n"
-                f"**Payment Incomplete**\n\n"     
+                f"3️⃣ اضغط **إكمال الدفع** وأرسل إيصال المبلغ المتبقي\n\n"
+                f"✅ سيتم تفعيل التسجيل بعد استلام المبلغ الكامل\n\n"
+                f"---\n\n"
+                f"⚠️ **Payment Incomplete**\n\n"
                 f"✅ Receipt verified\n\n"
                 f"💰 **Amount Paid:** {extracted_amount:.0f} SDG\n\n"
                 f"📊 **Total Required:** {expected_amount_for_gemini:.0f} SDG\n\n"
@@ -810,23 +815,23 @@ ID: <code>{telegram_user_id}</code>
             
             # Send admin notification
             admin_partial_msg = f"""
-⚠️ PARTIAL PAYMENT RECEIVED
+        ⚠️ PARTIAL PAYMENT RECEIVED
 
-👤 User: {user.first_name} {user.last_name or ''}
-🆔 ID: {telegram_user_id}
+        👤 User: {user.first_name} {user.last_name or ''}
+        🆔 ID: {telegram_user_id}
 
-💰 Paid: {extracted_amount:.0f} SDG
-📊 Required: {expected_amount_for_gemini:.0f} SDG
-⚠️ Remaining: {remaining:.0f} SDG
+        💰 Paid: {extracted_amount:.0f} SDG
+        📊 Required: {expected_amount_for_gemini:.0f} SDG
+        ⚠️ Remaining: {remaining:.0f} SDG
 
-📚 Courses: {course_names_str}
-📝 Enrollment IDs: {enrollment_ids_str}
+        📚 Courses: {course_names_str}
+        📝 Enrollment IDs: {enrollment_ids_str}
 
-✅ Account verified: {result.get('account_number')}
-🟢 Fraud score: {fraud_analysis['fraud_score']}/100
+        ✅ Account verified: {result.get('account_number')}
+        🟢 Fraud score: {fraud_analysis['fraud_score']}/100
 
-⏳ Waiting for remaining payment...
-"""
+        ⏳ Waiting for remaining payment...
+        """
             
             try:
                 # Download from S3 if needed
@@ -848,7 +853,6 @@ ID: <code>{telegram_user_id}</code>
                 
                 if file_path.startswith('https://') and os.path.exists(photo_to_send):
                     os.remove(photo_to_send)
-                    
             except Exception as e:
                 logger.error(f"Failed to send admin notification: {e}")
             
