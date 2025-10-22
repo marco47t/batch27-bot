@@ -127,30 +127,72 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
 
     logger.info(f"Gemini validation result: is_valid={gemini_result.get('is_valid')}, amount={gemini_result.get('amount')}, tx_id={gemini_result.get('transaction_id')}")
 
-    # ==================== STEP 2: ENHANCED FRAUD DETECTION ====================
-    logger.info(f"Starting enhanced fraud detection for user {telegram_user_id}")
+    # ==================== FRAUD DETECTION ====================
+    logger.info(f"🔍 Running fraud detection for user {telegram_user_id}")
 
-    # ===== CHECK FOR DUPLICATE TRANSACTION ID =====
-    transaction_id = gemini_result.get("transaction_id")
-    duplicate_check_result = {
-        "transaction_id_duplicate": False,
-        "is_duplicate": False,
-        "similarity_score": 0
+    # Extract transaction ID from Gemini result
+    transaction_id = gemini_result.get('transaction_id', 'N/A')
+    logger.info(f"📋 Extracted Transaction ID from receipt: {transaction_id}")
+
+    # ✅ NEW: Check transaction ID duplicate (returns 50 if duplicate, 0 otherwise)
+    from services.duplicate_detector import check_transaction_id_duplicate
+    transaction_duplicate_check = check_transaction_id_duplicate(transaction_id, internal_user_id)
+
+    # ✅ NEW: Image duplicate check (always returns 0 - disabled)
+    from services.duplicate_detector import check_duplicate_submission
+    image_duplicate_check = check_duplicate_submission(
+        user_id=internal_user_id,
+        image_path=file_path,
+        previous_receipt_paths=[e.receipt_image_path for e in enrollments_to_update if e.receipt_image_path]
+    )
+
+    # Calculate final fraud score
+    fraud_score = transaction_duplicate_check.get('fraud_score', 0)  # 50 if duplicate ID, 0 otherwise
+    image_similarity_score = image_duplicate_check.get('image_similarity_score', 0)  # Always 0
+
+    logger.info(f"📊 Fraud Scores - Transaction ID: {fraud_score}, Image: {image_similarity_score}")
+
+    # Build fraud analysis result
+    fraud_indicators = []
+    if transaction_duplicate_check.get('is_duplicate'):
+        fraud_indicators.append(
+            f"Duplicate transaction ID: {transaction_id} (previously used by user {transaction_duplicate_check.get('original_telegram_id')})"
+        )
+
+    # Determine recommendation based on fraud score
+    if fraud_score >= 70:
+        recommendation = 'REJECT'
+    elif fraud_score >= 40:
+        recommendation = 'MANUAL_REVIEW'
+    else:
+        recommendation = 'APPROVE'
+
+    fraud_analysis = {
+        'fraud_score': fraud_score,
+        'recommendation': recommendation,
+        'fraud_indicators': fraud_indicators,
+        'duplicate_check_result': {
+            'is_duplicate': transaction_duplicate_check.get('is_duplicate', False),
+            'similarity_score': transaction_duplicate_check.get('similarity_score', 0)
+        },
+        'ai_validation': gemini_result,
+        'checks_performed': [
+            'Transaction ID duplicate check (from Transaction table)',
+            'Image similarity check (disabled - returns 0)',
+            'Gemini AI receipt validation'
+        ]
     }
 
-    # Open session for duplicate checks
-    with get_db() as dup_session:
-        if transaction_id:
-            is_duplicate_tx = crud.check_duplicate_transaction_id(dup_session, transaction_id)
-            if is_duplicate_tx:
-                duplicate_check_result["transaction_id_duplicate"] = True
-                duplicate_check_result["duplicate_transaction_id"] = transaction_id
-                logger.warning(f"⚠️ Duplicate transaction ID detected: {transaction_id}")
-            else:
-                logger.info(f"✅ Transaction ID is unique: {transaction_id}")
-        else:
-            logger.warning(f"⚠️ No transaction ID extracted from receipt")
+    logger.info(f"🎯 Fraud Analysis: Score={fraud_score}, Recommendation={recommendation}")
 
+    # Store duplicate check details for admin notifications
+    duplicate_image_check = transaction_duplicate_check  # Use transaction check for admin display
+    duplicate_check_result = {
+        'is_duplicate': transaction_duplicate_check.get('is_duplicate', False),
+        'similarity_score': transaction_duplicate_check.get('similarity_score', 0),
+        'match_type': transaction_duplicate_check.get('match_type', 'NONE'),
+        'risk_level': transaction_duplicate_check.get('risk_level', 'LOW')
+    }
     # ===== IMAGE FORENSICS ANALYSIS =====
     from services.image_forensics import analyze_image_metadata
     from services.ela_detector import perform_ela
@@ -331,10 +373,17 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
                                 session,
                                 transaction.transaction_id,
                                 status=TransactionStatus.REJECTED,
+                                receipt_image_path=file_path,
                                 extracted_account=gemini_result.get("account_number"),
                                 extracted_amount=gemini_result.get("amount"),
                                 failure_reason=f"FRAUD DETECTED: " + "; ".join(fraud_analysis["fraud_indicators"]),
-                                gemini_response=str(fraud_analysis)
+                                gemini_response=str(fraud_analysis),
+                                fraud_score=fraud_analysis['fraud_score'],
+                                fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
+                                receipt_transaction_id=transaction_id,
+                                receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                                receipt_sender_name=gemini_result.get('sender_name'),
+                                receipt_amount=gemini_result.get('amount')
                             )
                     else:
                         transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
@@ -342,13 +391,21 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
                             session,
                             transaction.transaction_id,
                             status=TransactionStatus.REJECTED,
+                            receipt_image_path=file_path,
                             extracted_account=gemini_result.get("account_number"),
                             extracted_amount=gemini_result.get("amount"),
                             failure_reason=f"FRAUD DETECTED: " + "; ".join(fraud_analysis["fraud_indicators"]),
-                            gemini_response=str(fraud_analysis)
+                            gemini_response=str(fraud_analysis),
+                            fraud_score=fraud_analysis['fraud_score'],
+                            fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
+                            receipt_transaction_id=transaction_id,
+                            receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                            receipt_sender_name=gemini_result.get('sender_name'),
+                            receipt_amount=gemini_result.get('amount')
                         )
             
             session.commit()
+
             
             # Build detailed rejection message for user
             rejection_msg = user_message = """
@@ -528,17 +585,24 @@ ID: <code>{telegram_user_id}</code>
                         from database.models import Transaction
                         transaction = session.query(Transaction).filter(
                             Transaction.enrollment_id == resubmission_enrollment_id
-                        ).order_by(Transaction.submitted_date.desc()).first()
+                       ).order_by(Transaction.submitted_date.desc()).first()
                         
                         if transaction:
                             transaction = crud.update_transaction(
                                 session,
                                 transaction.transaction_id,
                                 status=TransactionStatus.PENDING,
+                                receipt_image_path=file_path,
                                 extracted_account=gemini_result.get("account_number"),
                                 extracted_amount=gemini_result.get("amount"),
                                 failure_reason=f"FLAGGED FOR REVIEW: " + "; ".join(fraud_analysis["fraud_indicators"]),
-                                gemini_response=str(fraud_analysis)
+                                gemini_response=str(fraud_analysis),
+                                fraud_score=fraud_analysis['fraud_score'],
+                                fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
+                                receipt_transaction_id=transaction_id,
+                                receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                                receipt_sender_name=gemini_result.get('sender_name'),
+                                receipt_amount=gemini_result.get('amount')
                             )
                         else:
                             transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
@@ -546,10 +610,17 @@ ID: <code>{telegram_user_id}</code>
                                 session,
                                 transaction.transaction_id,
                                 status=TransactionStatus.PENDING,
+                                receipt_image_path=file_path,
                                 extracted_account=gemini_result.get("account_number"),
                                 extracted_amount=gemini_result.get("amount"),
                                 failure_reason=f"FLAGGED FOR REVIEW: " + "; ".join(fraud_analysis["fraud_indicators"]),
-                                gemini_response=str(fraud_analysis)
+                                gemini_response=str(fraud_analysis),
+                                fraud_score=fraud_analysis['fraud_score'],
+                                fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
+                                receipt_transaction_id=transaction_id,
+                                receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                                receipt_sender_name=gemini_result.get('sender_name'),
+                                receipt_amount=gemini_result.get('amount')
                             )
                     else:
                         transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
@@ -557,11 +628,19 @@ ID: <code>{telegram_user_id}</code>
                             session,
                             transaction.transaction_id,
                             status=TransactionStatus.PENDING,
+                            receipt_image_path=file_path,
                             extracted_account=gemini_result.get("account_number"),
                             extracted_amount=gemini_result.get("amount"),
                             failure_reason=f"FLAGGED FOR REVIEW: " + "; ".join(fraud_analysis["fraud_indicators"]),
-                            gemini_response=str(fraud_analysis)
+                            gemini_response=str(fraud_analysis),
+                            fraud_score=fraud_analysis['fraud_score'],
+                            fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
+                            receipt_transaction_id=transaction_id,
+                            receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                            receipt_sender_name=gemini_result.get('sender_name'),
+                            receipt_amount=gemini_result.get('amount')
                         )
+
             
             session.commit()
             
@@ -774,44 +853,66 @@ ID: <code>{telegram_user_id}</code>
                 
             # Create/update transaction
             if not transaction:
-                    if resubmission_enrollment_id:
-                        from database.models import Transaction
-                        transaction = session.query(Transaction).filter(
-                            Transaction.enrollment_id == resubmission_enrollment_id
-                        ).order_by(Transaction.submitted_date.desc()).first()
-                        
-                        if transaction:
-                            transaction = crud.update_transaction(
-                                session,
-                                transaction.transaction_id,
-                                status=TransactionStatus.PENDING,
-                                extracted_account=result.get("account_number"),
-                                extracted_amount=extracted_amount,
-                                failure_reason=f"Partial payment: {extracted_amount:.0f}/{expected_amount_for_gemini:.0f} SDG. Remaining: {remaining_total:.0f} SDG",
-                                gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}"
-                            )
-                        else:
-                            transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
-                            transaction = crud.update_transaction(
-                                session,
-                                transaction.transaction_id,
-                                status=TransactionStatus.PENDING,
-                                extracted_account=result.get("account_number"),
-                                extracted_amount=extracted_amount,
-                                failure_reason=f"Partial payment: {extracted_amount:.0f}/{expected_amount_for_gemini:.0f} SDG. Remaining: {remaining_total:.0f} SDG",
-                                gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}"
-                            )
+                if resubmission_enrollment_id:
+                    from database.models import Transaction
+                    transaction = session.query(Transaction).filter(
+                        Transaction.enrollment_id == resubmission_enrollment_id
+                    ).order_by(Transaction.submitted_date.desc()).first()
+                    
+                    if transaction:
+                        transaction = crud.update_transaction(
+                            session,
+                            transaction.transaction_id,
+                            status=TransactionStatus.PENDING,
+                            receipt_image_path=file_path,
+                            extracted_account=result.get("account_number"),
+                            extracted_amount=extracted_amount,
+                            failure_reason=f"Partial payment: {extracted_amount:.0f}/{expected_amount_for_gemini:.0f} SDG. Remaining: {remaining_total:.0f} SDG",
+                            gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}",
+                            fraud_score=fraud_analysis['fraud_score'],
+                            fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
+                            receipt_transaction_id=transaction_id,
+                            receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                            receipt_sender_name=gemini_result.get('sender_name'),
+                            receipt_amount=extracted_amount
+                        )
                     else:
                         transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
                         transaction = crud.update_transaction(
                             session,
                             transaction.transaction_id,
                             status=TransactionStatus.PENDING,
+                            receipt_image_path=file_path,
                             extracted_account=result.get("account_number"),
                             extracted_amount=extracted_amount,
                             failure_reason=f"Partial payment: {extracted_amount:.0f}/{expected_amount_for_gemini:.0f} SDG. Remaining: {remaining_total:.0f} SDG",
-                            gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}"
+                            gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}",
+                            fraud_score=fraud_analysis['fraud_score'],
+                            fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
+                            receipt_transaction_id=transaction_id,
+                            receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                            receipt_sender_name=gemini_result.get('sender_name'),
+                            receipt_amount=extracted_amount
                         )
+                else:
+                    transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
+                    transaction = crud.update_transaction(
+                        session,
+                        transaction.transaction_id,
+                        status=TransactionStatus.PENDING,
+                        receipt_image_path=file_path,
+                        extracted_account=result.get("account_number"),
+                        extracted_amount=extracted_amount,
+                        failure_reason=f"Partial payment: {extracted_amount:.0f}/{expected_amount_for_gemini:.0f} SDG. Remaining: {remaining_total:.0f} SDG",
+                        gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}",
+                        fraud_score=fraud_analysis['fraud_score'],
+                        fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
+                        receipt_transaction_id=transaction_id,
+                        receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                        receipt_sender_name=gemini_result.get('sender_name'),
+                        receipt_amount=extracted_amount
+                    )
+
             
             # ✅ COMMIT CHANGES BEFORE CHECKING
             session.commit()
@@ -986,10 +1087,17 @@ ID: <code>{telegram_user_id}</code>
                             session,
                             transaction.transaction_id,
                             status=TransactionStatus.APPROVED if result["is_valid"] else TransactionStatus.REJECTED,
+                            receipt_image_path=file_path,
                             extracted_account=result.get("account_number"),
                             extracted_amount=result.get("amount"),
                             failure_reason=result.get("reason", ""),
-                            gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}"
+                            gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}",
+                            fraud_score=fraud_analysis['fraud_score'],
+                            fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
+                            receipt_transaction_id=transaction_id,
+                            receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                            receipt_sender_name=gemini_result.get('sender_name'),
+                            receipt_amount=result.get('amount')
                         )
                         logger.info(f"Updated transaction {transaction.transaction_id}")
                     else:
@@ -998,10 +1106,17 @@ ID: <code>{telegram_user_id}</code>
                             session,
                             transaction.transaction_id,
                             status=TransactionStatus.APPROVED if result["is_valid"] else TransactionStatus.REJECTED,
+                            receipt_image_path=file_path,
                             extracted_account=result.get("account_number"),
                             extracted_amount=result.get("amount"),
                             failure_reason=result.get("reason", ""),
-                            gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}"
+                            gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}",
+                            fraud_score=fraud_analysis['fraud_score'],
+                            fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
+                            receipt_transaction_id=transaction_id,
+                            receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                            receipt_sender_name=gemini_result.get('sender_name'),
+                            receipt_amount=result.get('amount')
                         )
                         logger.info(f"Created new transaction {transaction.transaction_id}")
                 else:
@@ -1010,13 +1125,20 @@ ID: <code>{telegram_user_id}</code>
                         session,
                         transaction.transaction_id,
                         status=TransactionStatus.APPROVED if result["is_valid"] else TransactionStatus.REJECTED,
+                        receipt_image_path=file_path,
                         extracted_account=result.get("account_number"),
                         extracted_amount=result.get("amount"),
                         failure_reason=result.get("reason", ""),
-                        gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}"
+                        gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}",
+                        fraud_score=fraud_analysis['fraud_score'],
+                        fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
+                        receipt_transaction_id=transaction_id,
+                        receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                        receipt_sender_name=gemini_result.get('sender_name'),
+                        receipt_amount=result.get('amount')
                     )
                     logger.info(f"Created transaction {transaction.transaction_id}")
-        
+
         if result["is_valid"]:
             course_data_list = []
             group_links_list = []

@@ -218,47 +218,62 @@ def create_transaction(session: Session, enrollment_id: int,
     session.flush()
     return transaction
 
-def update_transaction(session: Session, transaction_id: int, 
-                      status: str = None,
-                      extracted_account: str = None, 
-                      extracted_amount: float = None,
-                      failure_reason: str = None, 
-                      gemini_response: str = None,
-                      admin_id: int = None) -> Optional[Transaction]:
-    """Update transaction - accepts string and converts to enum"""
-    transaction = session.query(Transaction).filter(
-        Transaction.transaction_id == transaction_id
-    ).first()
+def update_transaction(
+    session,
+    transaction_id: int,
+    status: TransactionStatus = None,
+    receipt_image_path: str = None,
+    extracted_account: str = None,
+    extracted_amount: float = None,
+    failure_reason: str = None,
+    gemini_response: str = None,
+    fraud_score: int = None,
+    fraud_indicators: str = None,
+    image_hash: str = None,
+    receipt_transaction_id: str = None,
+    receipt_transfer_datetime: datetime = None,
+    receipt_sender_name: str = None,
+    receipt_amount: float = None,
+    admin_reviewed: int = None
+) -> Transaction:
+    """Update transaction with comprehensive fields"""
+    transaction = session.query(Transaction).filter(Transaction.transaction_id == transaction_id).first()
     
-    if transaction:
-        # Convert string status to TransactionStatus enum
-        if status:
-            if isinstance(status, str):
-                status = status.lower()  # Convert to lowercase for TransactionStatus
-                if status == "approved":
-                    transaction.status = TransactionStatus.APPROVED
-                elif status == "rejected":
-                    transaction.status = TransactionStatus.REJECTED
-                elif status == "pending":
-                    transaction.status = TransactionStatus.PENDING
-            else:
-                transaction.status = status
-                
-        if extracted_account:
-            transaction.extracted_account_number = extracted_account
-        if extracted_amount is not None:
-            transaction.extracted_amount = extracted_amount
-        if failure_reason:
-            transaction.failure_reason = failure_reason
-        if gemini_response:
-            transaction.gemini_response = gemini_response
-        if admin_id:
-            transaction.admin_reviewed_by = admin_id
-            transaction.admin_review_date = datetime.now()
-            
-        session.flush()
+    if not transaction:
+        raise ValueError(f"Transaction {transaction_id} not found")
     
+    if status is not None:
+        transaction.status = status
+    if receipt_image_path is not None:
+        transaction.receipt_image_path = receipt_image_path
+    if extracted_account is not None:
+        transaction.extracted_account = extracted_account
+    if extracted_amount is not None:
+        transaction.extracted_amount = extracted_amount
+    if failure_reason is not None:
+        transaction.failure_reason = failure_reason
+    if gemini_response is not None:
+        transaction.gemini_response = gemini_response
+    if fraud_score is not None:
+        transaction.fraud_score = fraud_score
+    if fraud_indicators is not None:
+        transaction.fraud_indicators = fraud_indicators
+    if image_hash is not None:
+        transaction.image_hash = image_hash
+    if receipt_transaction_id is not None:
+        transaction.receipt_transaction_id = receipt_transaction_id
+    if receipt_transfer_datetime is not None:
+        transaction.receipt_transfer_datetime = receipt_transfer_datetime
+    if receipt_sender_name is not None:
+        transaction.receipt_sender_name = receipt_sender_name
+    if receipt_amount is not None:
+        transaction.receipt_amount = receipt_amount
+    if admin_reviewed is not None:
+        transaction.admin_reviewed = admin_reviewed
+    
+    session.flush()
     return transaction
+
 
 def get_pending_transactions(session: Session) -> List[Transaction]:
     return session.query(Transaction).filter(

@@ -125,169 +125,85 @@ def calculate_similarity(hash1: Dict[str, str], hash2: Dict[str, str]) -> Tuple[
 
 def check_duplicate_submission(user_id: int, image_path: str, similarity_threshold: float = 75.0, previous_receipt_paths: list = None) -> Dict[str, Any]:
     """
-    Enhanced duplicate detection - checks ALL enrollments in database
-    Supports comma-separated receipt paths
+    IMAGE DUPLICATE CHECK - DISABLED (Always returns 0 score)
+    Kept for compatibility but returns no fraud risk
     """
     try:
-        logger.info(f"🔍 Starting duplicate detection for user {user_id}")
+        logger.info(f"🔍 Image duplicate check: DISABLED (returns 0 score)")
         
-        # Compute exact file hash
-        file_hash = compute_file_hash(image_path)
-        logger.info(f"📄 Computed file hash for new receipt: {file_hash[:16]}...")
+        # Return immediately with 0 score
+        return {
+            'is_duplicate': False,
+            'risk_level': 'LOW',
+            'match_type': 'NONE',
+            'similarity_score': 0,
+            'image_similarity_score': 0,
+            'best_similarity': 0,
+            'message': 'Image duplicate check disabled'
+        }
+
         
-        # Compute multiple perceptual hashes
-        multi_hash = compute_multi_hash(image_path)
-        
-        if not multi_hash:
-            return {
-                'is_duplicate': False,
-                'risk_level': 'UNKNOWN',
-                'message': 'Could not compute image signature'
-            }
-        
-        logger.info(f"🔑 Computed perceptual hashes: phash={multi_hash['phash'][:16]}...")
-        
-        with get_db() as session:
-            from database.models import Enrollment, User
-            
-            # ✅ FIRST: Check against same user's previous receipts
-            if previous_receipt_paths:
-                expanded_paths = []
-                for path in previous_receipt_paths:
-                    if path:
-                        expanded_paths.extend([p.strip() for p in path.split(',') if p.strip()])
-                
-                logger.info(f"Checking against {len(expanded_paths)} previous receipts from SAME user")
-                
-                for idx, prev_path in enumerate(expanded_paths):
-                    logger.info(f"  → Checking same-user receipt {idx+1}/{len(expanded_paths)}: {prev_path[-50:]}")
-                    
-                    # Check exact duplicate
-                    prev_file_hash = compute_file_hash(prev_path)
-                    if prev_file_hash and prev_file_hash == file_hash:
-                        logger.warning(f"🚨 EXACT MATCH with own previous receipt!")
-                        return {
-                            'is_duplicate': True,
-                            'risk_level': 'HIGH',
-                            'match_type': 'EXACT',
-                            'similarity_percentage': 100.0,
-                            'original_receipt_path': prev_path,
-                            'message': '⚠️ You already submitted this exact receipt. Please submit a NEW receipt for the remaining amount.'
-                        }
-                    
-                    # Check perceptual similarity
-                    prev_multi_hash = compute_multi_hash(prev_path)
-                    if prev_multi_hash:
-                        similarity, match_type = calculate_similarity(multi_hash, prev_multi_hash)
-                        logger.info(f"    Similarity: {similarity:.1f}% ({match_type})")
-                        
-                        if similarity >= similarity_threshold:
-                            logger.warning(f"⚠️ HIGH SIMILARITY with own previous receipt: {similarity:.1f}%")
-                            return {
-                                'is_duplicate': True,
-                                'risk_level': 'HIGH' if similarity >= 90 else 'MEDIUM',
-                                'match_type': match_type,
-                                'similarity_percentage': similarity,
-                                'original_receipt_path': prev_path,
-                                'message': f'⚠️ This receipt is {similarity:.1f}% similar to one you already submitted.'
-                            }
-            
-            # ✅ SECOND: Check ALL enrollments in database (cross-user check)
-            all_enrollments = session.query(Enrollment).join(User).all()
-            
-            logger.info(f"🔍 Checking duplicate against {len(all_enrollments)} total enrollments in database")
-            
-            best_match = None
-            best_similarity = 0.0
-            total_receipts_checked = 0
-            
-            for enrollment in all_enrollments:
-                if not enrollment.receipt_image_path:
-                    continue
-                
-                # ✅ Split comma-separated receipt paths
-                receipt_paths = [p.strip() for p in enrollment.receipt_image_path.split(',') if p.strip()]
-                
-                for receipt_path in receipt_paths:
-                    total_receipts_checked += 1
-                    
-                    # ✅ Check BOTH same user AND other users' receipts
-                    original_user = enrollment.user
-                    is_same_user = enrollment.user_id == user_id
-                    
-                    logger.info(f"  → Checking receipt {total_receipts_checked}: Enrollment #{enrollment.enrollment_id}, User {original_user.telegram_user_id} {'(SAME USER)' if is_same_user else '(OTHER USER)'}")
-                    
-                    # Check exact duplicate
-                    prev_file_hash = compute_file_hash(receipt_path)
-                    if prev_file_hash and prev_file_hash == file_hash:
-                        if is_same_user:
-                            logger.warning(f"🚨 EXACT DUPLICATE with own enrollment {enrollment.enrollment_id}")
-                            return {
-                                'is_duplicate': True,
-                                'risk_level': 'HIGH',
-                                'match_type': 'EXACT',
-                                'similarity_percentage': 100.0,
-                                'original_receipt_path': receipt_path,
-                                'message': '⚠️ You already submitted this exact receipt for another enrollment.'
-                            }
-                        else:
-                            logger.warning(f"🚨 EXACT DUPLICATE with OTHER user: Enrollment {enrollment.enrollment_id}, User {original_user.telegram_user_id}")
-                            return {
-                                'is_duplicate': True,
-                                'risk_level': 'HIGH',
-                                'match_type': 'EXACT',
-                                'similarity_percentage': 100.0,
-                                'matched_enrollment_id': enrollment.enrollment_id,
-                                'original_user_id': original_user.user_id,
-                                'original_user_name': f"{original_user.first_name or ''} {original_user.last_name or ''}".strip() or "Unknown",
-                                'original_user_username': original_user.username or "N/A",
-                                'original_telegram_id': original_user.telegram_user_id,
-                                'original_receipt_path': receipt_path,
-                                'message': 'Exact duplicate - identical receipt submitted by another user'
-                            }
-                    
-                    # Check perceptual similarity
-                    prev_multi_hash = compute_multi_hash(receipt_path)
-                    if prev_multi_hash:
-                        similarity, match_type = calculate_similarity(multi_hash, prev_multi_hash)
-                        logger.info(f"    Similarity: {similarity:.1f}% ({match_type})")
-                        
-                        # Keep track of best match
-                        if similarity > best_similarity:
-                            best_similarity = similarity
-                            best_match = {
-                                'is_duplicate': similarity >= similarity_threshold,
-                                'risk_level': 'HIGH' if similarity >= 90 else 'MEDIUM' if similarity >= 80 else 'LOW',
-                                'match_type': match_type,
-                                'similarity_percentage': similarity,
-                                'matched_enrollment_id': enrollment.enrollment_id,
-                                'original_user_id': original_user.user_id,
-                                'original_user_name': f"{original_user.first_name or ''} {original_user.last_name or ''}".strip() or "Unknown",
-                                'original_user_username': original_user.username or "N/A",
-                                'original_telegram_id': original_user.telegram_user_id,
-                                'original_receipt_path': receipt_path,
-                                'message': f'Duplicate detected ({similarity:.1f}% similar) - receipt used by {"same user" if is_same_user else "another user"}'
-                            }
-            
-            logger.info(f"✅ Duplicate check complete: {total_receipts_checked} receipts checked from {len(all_enrollments)} enrollments")
-            logger.info(f"📊 Best match: {best_similarity:.1f}% similarity")
-            
-            # Return best match if above threshold
-            if best_match and best_match['is_duplicate']:
-                logger.warning(f"⚠️ SIMILAR DUPLICATE: {best_match['similarity_percentage']:.1f}% match")
-                return best_match
-            
-            return {
-                'is_duplicate': False,
-                'risk_level': 'LOW',
-                'message': 'No duplicates found',
-                'best_similarity': best_similarity
-            }
-    
     except Exception as e:
         logger.error(f"Duplicate check failed: {e}", exc_info=True)
         return {
             'is_duplicate': False,
             'risk_level': 'UNKNOWN',
-            'message': f'Duplicate check error: {str(e)}'
+            'message': f'Duplicate check error: {str(e)}',
+            'image_similarity_score': 0
+        }
+
+def check_transaction_id_duplicate(transaction_id: str, user_id: int = None) -> Dict[str, Any]:
+    """
+    Check if transaction ID already exists in Transaction table
+    Returns 50 fraud score if duplicate found
+    """
+    if not transaction_id:
+        return {
+            'is_duplicate': False,
+            'fraud_score': 0,
+            'message': 'No transaction ID provided'
+        }
+    
+    try:
+        with get_db() as session:
+            from database.models import Transaction, Enrollment, User
+            
+            # Search for matching transaction ID
+            existing_transaction = session.query(Transaction).filter(
+                Transaction.receipt_transaction_id == transaction_id
+            ).first()
+            
+            if existing_transaction:
+                # Get enrollment and user info
+                enrollment = session.query(Enrollment).filter(
+                    Enrollment.enrollment_id == existing_transaction.enrollment_id
+                ).first()
+                
+                original_user = enrollment.user if enrollment else None
+                
+                logger.warning(f"🚨 DUPLICATE TRANSACTION ID: {transaction_id}")
+                
+                return {
+                    'is_duplicate': True,
+                    'fraud_score': 50,  # Fixed score for ID duplicates
+                    'risk_level': 'HIGH',
+                    'match_type': 'TRANSACTION_ID',
+                    'message': f'Transaction ID {transaction_id} already used',
+                    'original_user_id': original_user.user_id if original_user else None,
+                    'original_telegram_id': original_user.telegram_user_id if original_user else None,
+                    'original_transaction_id': existing_transaction.transaction_id
+                }
+            
+            return {
+                'is_duplicate': False,
+                'fraud_score': 0,
+                'message': 'Transaction ID is unique'
+            }
+            
+    except Exception as e:
+        logger.error(f"Transaction ID duplicate check failed: {e}")
+        return {
+            'is_duplicate': False,
+            'fraud_score': 0,
+            'message': f'Check failed: {str(e)}'
         }
