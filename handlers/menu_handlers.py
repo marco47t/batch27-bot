@@ -105,19 +105,26 @@ async def handle_my_courses_from_message(update: Update, context: ContextTypes.D
         
         pending_enrollments = [e for e in all_enrollments if e.payment_status.value in ['PENDING', 'FAILED']]
         selected_ids = context.user_data['selected_pending_enrollments']
-        total_selected_amount = sum(e.payment_amount for e in pending_enrollments if e.enrollment_id in selected_ids and e.payment_amount)
+        
+        # ✅ CALCULATE REMAINING BALANCE INSTEAD OF FULL AMOUNT
+        total_selected_amount = 0
+        for e in pending_enrollments:
+            if e.enrollment_id in selected_ids and e.payment_amount:
+                paid = e.amount_paid or 0
+                remaining = e.payment_amount - paid
+                total_selected_amount += remaining
         
         log_user_action(telegram_user_id, "my_courses_view_from_message")
-    
-    new_text = my_courses_message(
-        all_enrollments,
-        pending_count=len(pending_enrollments),
-        selected_count=len(selected_ids),
-        total_selected=total_selected_amount
-    )
-    markup = my_courses_selection_keyboard(pending_enrollments, selected_ids)
-    
-    await update.message.reply_text(new_text, reply_markup=markup, parse_mode='Markdown')
+        
+        new_text = my_courses_message(
+            all_enrollments,
+            pending_count=len(pending_enrollments),
+            selected_count=len(selected_ids),
+            total_selected=total_selected_amount
+        )
+        
+        markup = my_courses_selection_keyboard(pending_enrollments, selected_ids)
+        await update.message.reply_text(new_text, reply_markup=markup, parse_mode='Markdown')
 
 
 async def handle_about_bot_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -135,7 +142,6 @@ async def handle_about_bot_message(update: Update, context: ContextTypes.DEFAULT
 async def my_courses_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show the user's enrolled courses and payment selection (from INLINE callback)"""
     query = update.callback_query
-    # Don't answer query here, let the calling function do it.
     telegram_user_id = query.from_user.id
     context.user_data.setdefault('selected_pending_enrollments', [])
     
@@ -160,28 +166,34 @@ async def my_courses_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         pending_enrollments = [e for e in all_enrollments if e.payment_status.value in ['PENDING', 'FAILED']]
         selected_ids = context.user_data['selected_pending_enrollments']
-        total_selected_amount = sum(e.payment_amount for e in pending_enrollments if e.enrollment_id in selected_ids and e.payment_amount)
+        
+        # ✅ CALCULATE REMAINING BALANCE INSTEAD OF FULL AMOUNT
+        total_selected_amount = 0
+        for e in pending_enrollments:
+            if e.enrollment_id in selected_ids and e.payment_amount:
+                paid = e.amount_paid or 0
+                remaining = e.payment_amount - paid
+                total_selected_amount += remaining
         
         log_user_action(telegram_user_id, "my_courses_view_from_callback")
-    
-    new_text = my_courses_message(
-        all_enrollments,
-        pending_count=len(pending_enrollments),
-        selected_count=len(selected_ids),
-        total_selected=total_selected_amount
-    )
-    markup = my_courses_selection_keyboard(pending_enrollments, selected_ids)
-    
-    try:
-        await query.edit_message_text(new_text, reply_markup=markup, parse_mode='Markdown')
-    except BadRequest as e:
-        if "Message is not modified" in str(e):
-            logger.warning("Message not modified, skipping edit.")
-            # This is not a critical error, we can ignore it.
-            pass
-        else:
-            # Re-raise other BadRequest errors
-            raise
+        
+        new_text = my_courses_message(
+            all_enrollments,
+            pending_count=len(pending_enrollments),
+            selected_count=len(selected_ids),
+            total_selected=total_selected_amount
+        )
+        
+        markup = my_courses_selection_keyboard(pending_enrollments, selected_ids)
+        
+        try:
+            await query.edit_message_text(new_text, reply_markup=markup, parse_mode='Markdown')
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                logger.warning("Message not modified, skipping edit.")
+                pass
+            else:
+                raise
 
 
 async def my_course_select_deselect_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -242,11 +254,12 @@ async def proceed_to_pay_selected_pending_callback(update: Update, context: Cont
     """Proceed to payment for selected pending courses"""
     query = update.callback_query
     await query.answer()
+    
     telegram_user_id = query.from_user.id
     selected_ids = context.user_data.get('selected_pending_enrollments', [])
     
     if not selected_ids:
-        await query.answer("لم تختر أي دورات للدفع!", show_alert=True)
+        await query.answer("[translate:لم تختر أي دورات للدفع]!", show_alert=True)
         return
     
     with get_db() as session:
@@ -267,23 +280,30 @@ async def proceed_to_pay_selected_pending_callback(update: Update, context: Cont
             crud.Enrollment.user_id == internal_user_id
         ).all()
         
-        total_amount = sum(e.payment_amount for e in enrollments_to_pay if e.payment_amount)
-    
-    if total_amount <= 0:
-        await query.answer("حدث خطأ في حساب المبلغ.", show_alert=True)
-        return
-    
-    context.user_data["awaiting_receipt_upload"] = True
-    context.user_data["current_payment_enrollment_ids"] = selected_ids
-    context.user_data["current_payment_total"] = total_amount
-    context.user_data.pop("resubmission_enrollment_id", None)
-    context.user_data['selected_pending_enrollments'] = []
-    
-    await query.edit_message_text(
-        payment_instructions_message(total_amount),
-        reply_markup=payment_upload_keyboard(),
-        parse_mode='Markdown'
-    )
+        # ✅ CALCULATE TOTAL REMAINING BALANCE
+        total_amount = 0
+        for e in enrollments_to_pay:
+            if e.payment_amount:
+                paid = e.amount_paid or 0
+                remaining = e.payment_amount - paid
+                total_amount += remaining
+        
+        if total_amount <= 0:
+            await query.answer("[translate:حدث خطأ في حساب المبلغ]", show_alert=True)
+            return
+        
+        context.user_data["awaiting_receipt_upload"] = True
+        context.user_data["current_payment_enrollment_ids"] = selected_ids
+        context.user_data["current_payment_total"] = total_amount
+        context.user_data.pop("resubmission_enrollment_id", None)
+        context.user_data['selected_pending_enrollments'] = []
+        
+        await query.edit_message_text(
+            payment_instructions_message(total_amount),
+            reply_markup=payment_upload_keyboard(),
+            parse_mode='Markdown'
+        )
+
 
 
 async def cancel_selected_pending_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
