@@ -372,28 +372,27 @@ async def view_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if not cart_items and not pending_enrollments:
             logger.info(f"Cart is empty for user {telegram_user_id}")
             await query.edit_message_text(
-                "🛒 سلة التسوق فارغة\n\nقم بإضافة دورات من قائمة التسجيل.",
+                "[translate:سلة التسوق فارغة]\n\n[translate:قم بإضافة دورات من قائمة التسجيل]",
                 reply_markup=courses_menu_keyboard()
             )
             return
         
-        # Build cart message
+        # ✅ BUILD TOTAL WITH BOTH CART ITEMS AND PENDING BALANCES
         courses = [item.course for item in cart_items]
         total = sum(course.price for course in courses)
         
-        message = cart_message(courses, total)
+        # Add remaining balances from pending enrollments
+        for enrollment in pending_enrollments:
+            paid = enrollment.amount_paid or 0
+            remaining = enrollment.payment_amount - paid
+            if remaining > 0:
+                total += remaining
         
-        # ✅ ADD PENDING COURSES WITH REMAINING BALANCE
-        if pending_enrollments:
-            message += "\n\n⚠️ **دورات تحتاج إكمال الدفع:**\n**Courses needing payment completion:**\n\n"
-            for enrollment in pending_enrollments:
-                paid = enrollment.amount_paid or 0
-                remaining = enrollment.payment_amount - paid
-                if remaining > 0:
-                    message += f"• {enrollment.course.course_name}: **{remaining:.0f} SDG** (متبقي/remaining)\n"
-                    total += remaining
+        # ✅ PASS PENDING ENROLLMENTS TO MESSAGE FUNCTION
+        from utils.messages import cart_message
+        message = cart_message(courses, total, pending_enrollments)
         
-        logger.info(f"User {telegram_user_id} cart: {len(cart_items)} items + {len(pending_enrollments)} pending, total={total}")
+        logger.info(f"User {telegram_user_id} cart: {len(cart_items)} new items + {len(pending_enrollments)} pending, total={total:.0f}")
         
         await query.edit_message_text(
             message,

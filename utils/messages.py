@@ -381,7 +381,9 @@ def cart_message(courses: list, total: float, pending_enrollments: list = None) 
     
     # Pending courses with partial payments
     if pending_enrollments:
-        message += "\n⚠️ [translate:دورات تحتاج إكمال الدفع]:\n"
+        if courses:
+            message += "\n"
+        message += "⚠️ [translate:دورات تحتاج إكمال الدفع]:\n"
         for enrollment in pending_enrollments:
             paid = enrollment.amount_paid or 0
             remaining = enrollment.payment_amount - paid
@@ -390,6 +392,7 @@ def cart_message(courses: list, total: float, pending_enrollments: list = None) 
     
     message += f"\n💰 [translate:المجموع]: {total:.0f} [translate:جنيه سوداني]"
     return message
+
 
 
 def receipt_processing_message() -> str:
