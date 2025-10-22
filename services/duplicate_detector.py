@@ -127,13 +127,13 @@ def calculate_similarity(hash1: Dict[str, str], hash2: Dict[str, str]) -> Tuple[
 def check_duplicate_submission(user_id: int, image_path: str, similarity_threshold: float = 75.0, previous_receipt_paths: list = None) -> Dict[str, Any]:
     """
     Enhanced duplicate detection using multiple perceptual hashing algorithms
-    Now supports checking against specific previous receipt paths (for partial payments)
+    Now supports checking against specific previous receipt paths (comma-separated support)
     
     Args:
         user_id: Current user ID
         image_path: Path or URL to receipt image
         similarity_threshold: Minimum similarity % to flag as duplicate (default: 75%)
-        previous_receipt_paths: Optional list of specific receipt paths to check against (for same user's partial payments)
+        previous_receipt_paths: Optional list of comma-separated receipt paths to check against
     
     Returns dict with duplicate detection results
     """
@@ -156,12 +156,15 @@ def check_duplicate_submission(user_id: int, image_path: str, similarity_thresho
             
             # ✅ FIRST: Check against provided previous receipts (for same user's partial payments)
             if previous_receipt_paths:
-                logger.info(f"Checking against {len(previous_receipt_paths)} previous receipts from same user")
+                # ✅ NEW: Split comma-separated paths
+                expanded_paths = []
+                for path in previous_receipt_paths:
+                    if path:
+                        expanded_paths.extend([p.strip() for p in path.split(',') if p.strip()])
                 
-                for prev_path in previous_receipt_paths:
-                    if not prev_path:
-                        continue
-                    
+                logger.info(f"Checking against {len(expanded_paths)} previous receipts from same user")
+                
+                for prev_path in expanded_paths:
                     # Check exact duplicate (file hash)
                     prev_file_hash = compute_file_hash(prev_path)
                     if prev_file_hash and prev_file_hash == file_hash:
@@ -189,64 +192,64 @@ def check_duplicate_submission(user_id: int, image_path: str, similarity_thresho
                                 'message': f'⚠️ This receipt is {similarity:.1f}% similar to one you already submitted. Please submit a NEW receipt.'
                             }
             
-            # THEN: Check ALL transactions from ALL users (cross-user duplicate check)
-            all_transactions = session.query(Transaction).join(
-                Enrollment, Transaction.enrollment_id == Enrollment.enrollment_id
-            ).join(
-                User, Enrollment.user_id == User.user_id
-            ).all()
+            # ✅ NEW: Check ALL enrollments in database (split comma-separated paths)
+            all_enrollments = session.query(Enrollment).join(User).all()
             
             best_match = None
             best_similarity = 0.0
             
-            for txn in all_transactions:
-                if not txn.receipt_image_path:
+            for enrollment in all_enrollments:
+                if not enrollment.receipt_image_path:
                     continue
                 
-                # Skip if this is current user's own transaction
-                if txn.enrollment.user_id == user_id:
-                    continue
+                # ✅ NEW: Split comma-separated receipt paths
+                receipt_paths = [p.strip() for p in enrollment.receipt_image_path.split(',') if p.strip()]
                 
-                original_user = txn.enrollment.user
-                
-                # Check exact duplicate (file hash)
-                prev_file_hash = compute_file_hash(txn.receipt_image_path)
-                if prev_file_hash and prev_file_hash == file_hash:
-                    return {
-                        'is_duplicate': True,
-                        'risk_level': 'HIGH',
-                        'match_type': 'EXACT',
-                        'similarity_percentage': 100.0,
-                        'matched_transaction_id': txn.transaction_id,
-                        'original_user_id': original_user.user_id,
-                        'original_user_name': f"{original_user.first_name or ''} {original_user.last_name or ''}".strip() or "Unknown",
-                        'original_user_username': original_user.username or "N/A",
-                        'original_telegram_id': original_user.telegram_user_id,
-                        'original_receipt_path': txn.receipt_image_path,
-                        'message': 'Exact duplicate - identical file submitted before by another user'
-                    }
-                
-                # Check perceptual similarity with multiple algorithms
-                prev_multi_hash = compute_multi_hash(txn.receipt_image_path)
-                if prev_multi_hash:
-                    similarity, match_type = calculate_similarity(multi_hash, prev_multi_hash)
+                for receipt_path in receipt_paths:
+                    # Skip if this is current user's own enrollment
+                    if enrollment.user_id == user_id:
+                        continue
                     
-                    # Keep track of best match
-                    if similarity > best_similarity:
-                        best_similarity = similarity
-                        best_match = {
-                            'is_duplicate': similarity >= similarity_threshold,
-                            'risk_level': 'HIGH' if similarity >= 90 else 'MEDIUM' if similarity >= 80 else 'LOW',
-                            'match_type': match_type,
-                            'similarity_percentage': similarity,
-                            'matched_transaction_id': txn.transaction_id,
+                    original_user = enrollment.user
+                    
+                    # Check exact duplicate (file hash)
+                    prev_file_hash = compute_file_hash(receipt_path)
+                    if prev_file_hash and prev_file_hash == file_hash:
+                        return {
+                            'is_duplicate': True,
+                            'risk_level': 'HIGH',
+                            'match_type': 'EXACT',
+                            'similarity_percentage': 100.0,
+                            'matched_enrollment_id': enrollment.enrollment_id,
                             'original_user_id': original_user.user_id,
                             'original_user_name': f"{original_user.first_name or ''} {original_user.last_name or ''}".strip() or "Unknown",
                             'original_user_username': original_user.username or "N/A",
                             'original_telegram_id': original_user.telegram_user_id,
-                            'original_receipt_path': txn.receipt_image_path,
-                            'message': f'Duplicate detected ({similarity:.1f}% similar) - receipt already used by another user'
+                            'original_receipt_path': receipt_path,
+                            'message': 'Exact duplicate - identical file submitted before by another user'
                         }
+                    
+                    # Check perceptual similarity
+                    prev_multi_hash = compute_multi_hash(receipt_path)
+                    if prev_multi_hash:
+                        similarity, match_type = calculate_similarity(multi_hash, prev_multi_hash)
+                        
+                        # Keep track of best match
+                        if similarity > best_similarity:
+                            best_similarity = similarity
+                            best_match = {
+                                'is_duplicate': similarity >= similarity_threshold,
+                                'risk_level': 'HIGH' if similarity >= 90 else 'MEDIUM' if similarity >= 80 else 'LOW',
+                                'match_type': match_type,
+                                'similarity_percentage': similarity,
+                                'matched_enrollment_id': enrollment.enrollment_id,
+                                'original_user_id': original_user.user_id,
+                                'original_user_name': f"{original_user.first_name or ''} {original_user.last_name or ''}".strip() or "Unknown",
+                                'original_user_username': original_user.username or "N/A",
+                                'original_telegram_id': original_user.telegram_user_id,
+                                'original_receipt_path': receipt_path,
+                                'message': f'Duplicate detected ({similarity:.1f}% similar) - receipt already used by another user'
+                            }
             
             # Return best match if above threshold
             if best_match and best_match['is_duplicate']:
@@ -266,3 +269,4 @@ def check_duplicate_submission(user_id: int, image_path: str, similarity_thresho
             'risk_level': 'UNKNOWN',
             'message': f'Duplicate check error: {str(e)}'
         }
+
