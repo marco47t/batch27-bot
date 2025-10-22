@@ -2,52 +2,63 @@
 import hashlib
 import cv2
 import numpy as np
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 import logging
 from database import get_db, crud
+import imagehash
+from PIL import Image
+import os
+import tempfile
 
 logger = logging.getLogger(__name__)
 
 
-def compute_image_hash(image_path: str) -> str:
-    """Compute perceptual hash that's resistant to minor edits (supports S3 URLs)"""
+def compute_multi_hash(image_path: str) -> Dict[str, str]:
+    """
+    Compute multiple perceptual hashes for better duplicate detection
+    Returns dict with different hash types
+    """
     temp_file = None
     try:
         # If S3 URL, download first
         if image_path.startswith('http'):
-            import tempfile
-            import os
             from utils.s3_storage import download_receipt_from_s3
             with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
                 temp_file = tmp.name
             download_receipt_from_s3(image_path, temp_file)
             image_path = temp_file
         
-        img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-        if img is None:
-            raise ValueError(f"Could not read image: {image_path}")
-            
-        img_resized = cv2.resize(img, (64, 64))
-        dct = cv2.dct(np.float32(img_resized))
-        dct_low = dct[:8, :8]
-        median = np.median(dct_low)
+        # Load image with PIL for imagehash library
+        img_pil = Image.open(image_path)
         
-        hash_str = ""
-        for i in range(8):
-            for j in range(8):
-                hash_str += '1' if dct_low[i, j] > median else '0'
-        return hash_str
+        # Compute multiple hash types (more resistant to edits)
+        hashes = {
+            'phash': str(imagehash.phash(img_pil, hash_size=16)),      # Perceptual hash (16x16 = 256 bits)
+            'dhash': str(imagehash.dhash(img_pil, hash_size=16)),      # Difference hash
+            'whash': str(imagehash.whash(img_pil, hash_size=16)),      # Wavelet hash
+            'average': str(imagehash.average_hash(img_pil, hash_size=16))  # Average hash
+        }
+        
+        # Also compute color histogram for content similarity
+        img_cv = cv2.imread(image_path)
+        if img_cv is not None:
+            # Resize and compute histogram
+            img_resized = cv2.resize(img_cv, (256, 256))
+            hist = cv2.calcHist([img_resized], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
+            hist = cv2.normalize(hist, hist).flatten()
+            hashes['histogram'] = hashlib.sha256(hist.tobytes()).hexdigest()[:32]
+        
+        return hashes
+    
     except Exception as e:
-        logger.error(f"Hash computation failed: {e}")
-        return ""
+        logger.error(f"Multi-hash computation failed: {e}")
+        return {}
     finally:
-        # Clean up temp file
         if temp_file and os.path.exists(temp_file):
             try:
                 os.remove(temp_file)
             except:
                 pass
-
 
 
 def compute_file_hash(image_path: str) -> str:
@@ -56,8 +67,6 @@ def compute_file_hash(image_path: str) -> str:
     try:
         # If S3 URL, download first
         if image_path.startswith('http'):
-            import tempfile
-            import os
             from utils.s3_storage import download_receipt_from_s3
             with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
                 temp_file = tmp.name
@@ -70,7 +79,6 @@ def compute_file_hash(image_path: str) -> str:
         logger.error(f"File hash failed: {e}")
         return ""
     finally:
-        # Clean up temp file
         if temp_file and os.path.exists(temp_file):
             try:
                 os.remove(temp_file)
@@ -78,36 +86,63 @@ def compute_file_hash(image_path: str) -> str:
                 pass
 
 
-
-def hamming_distance(hash1: str, hash2: str) -> int:
-    """Calculate hamming distance between two hashes"""
-    if len(hash1) != len(hash2):
-        return 999
-    return sum(c1 != c2 for c1, c2 in zip(hash1, hash2))
-
-
-def check_duplicate_submission(user_id: int, image_path: str, threshold: int = 5) -> Dict[str, Any]:
+def calculate_similarity(hash1: Dict[str, str], hash2: Dict[str, str]) -> Tuple[float, str]:
     """
-    Check if this receipt is a duplicate across ALL users (not just current user)
+    Calculate similarity between two multi-hash sets
+    Returns: (similarity_percentage, match_type)
+    """
+    if not hash1 or not hash2:
+        return 0.0, "UNKNOWN"
     
-    Returns dict with:
-        - is_duplicate: bool
-        - risk_level: str
-        - match_type: str (EXACT or SIMILAR)
-        - similarity_percentage: float
-        - matched_transaction_id: int
-        - original_user_id: int
-        - original_user_name: str
-        - original_user_username: str
-        - original_telegram_id: int
-        - original_receipt_path: str
-        - message: str
+    similarities = []
+    
+    # Compare each hash type
+    for hash_type in ['phash', 'dhash', 'whash', 'average']:
+        if hash_type in hash1 and hash_type in hash2:
+            h1 = imagehash.hex_to_hash(hash1[hash_type])
+            h2 = imagehash.hex_to_hash(hash2[hash_type])
+            # Calculate similarity (lower hamming distance = more similar)
+            hamming_dist = h1 - h2
+            max_bits = 256  # 16x16 hash
+            similarity = ((max_bits - hamming_dist) / max_bits) * 100
+            similarities.append(similarity)
+    
+    if not similarities:
+        return 0.0, "UNKNOWN"
+    
+    # Use average similarity across all hash types
+    avg_similarity = sum(similarities) / len(similarities)
+    
+    # Determine match type based on similarity
+    if avg_similarity >= 98:
+        return avg_similarity, "EXACT"
+    elif avg_similarity >= 85:
+        return avg_similarity, "VERY_SIMILAR"
+    elif avg_similarity >= 75:
+        return avg_similarity, "SIMILAR"
+    else:
+        return avg_similarity, "DIFFERENT"
+
+
+def check_duplicate_submission(user_id: int, image_path: str, similarity_threshold: float = 75.0) -> Dict[str, Any]:
+    """
+    Enhanced duplicate detection using multiple perceptual hashing algorithms
+    
+    Args:
+        user_id: Current user ID
+        image_path: Path or URL to receipt image
+        similarity_threshold: Minimum similarity % to flag as duplicate (default: 75%)
+    
+    Returns dict with duplicate detection results
     """
     try:
+        # Compute exact file hash
         file_hash = compute_file_hash(image_path)
-        perceptual_hash = compute_image_hash(image_path)
         
-        if not perceptual_hash:
+        # Compute multiple perceptual hashes
+        multi_hash = compute_multi_hash(image_path)
+        
+        if not multi_hash:
             return {
                 'is_duplicate': False,
                 'risk_level': 'UNKNOWN',
@@ -123,6 +158,9 @@ def check_duplicate_submission(user_id: int, image_path: str, threshold: int = 5
             ).join(
                 User, Enrollment.user_id == User.user_id
             ).all()
+            
+            best_match = None
+            best_similarity = 0.0
             
             for txn in all_transactions:
                 if not txn.receipt_image_path:
@@ -148,34 +186,40 @@ def check_duplicate_submission(user_id: int, image_path: str, threshold: int = 5
                         'original_user_username': original_user.username or "N/A",
                         'original_telegram_id': original_user.telegram_user_id,
                         'original_receipt_path': txn.receipt_image_path,
-                        'message': 'Exact duplicate - same file submitted before by another user'
+                        'message': 'Exact duplicate - identical file submitted before by another user'
                     }
                 
-                # Check visual similarity (perceptual hash)
-                prev_perceptual_hash = compute_image_hash(txn.receipt_image_path)
-                if prev_perceptual_hash:
-                    distance = hamming_distance(perceptual_hash, prev_perceptual_hash)
+                # Check perceptual similarity with multiple algorithms
+                prev_multi_hash = compute_multi_hash(txn.receipt_image_path)
+                if prev_multi_hash:
+                    similarity, match_type = calculate_similarity(multi_hash, prev_multi_hash)
                     
-                    if distance <= threshold:
-                        similarity_pct = ((64 - distance) / 64) * 100
-                        return {
-                            'is_duplicate': True,
-                            'risk_level': 'HIGH',
-                            'match_type': 'SIMILAR',
-                            'similarity_percentage': similarity_pct,
+                    # Keep track of best match
+                    if similarity > best_similarity:
+                        best_similarity = similarity
+                        best_match = {
+                            'is_duplicate': similarity >= similarity_threshold,
+                            'risk_level': 'HIGH' if similarity >= 90 else 'MEDIUM' if similarity >= 80 else 'LOW',
+                            'match_type': match_type,
+                            'similarity_percentage': similarity,
                             'matched_transaction_id': txn.transaction_id,
                             'original_user_id': original_user.user_id,
                             'original_user_name': f"{original_user.first_name or ''} {original_user.last_name or ''}".strip() or "Unknown",
                             'original_user_username': original_user.username or "N/A",
                             'original_telegram_id': original_user.telegram_user_id,
                             'original_receipt_path': txn.receipt_image_path,
-                            'message': f'Near-duplicate detected ({similarity_pct:.1f}% similar) - receipt already used by another user'
+                            'message': f'Duplicate detected ({similarity:.1f}% similar) - receipt already used by another user'
                         }
+            
+            # Return best match if above threshold
+            if best_match and best_match['is_duplicate']:
+                return best_match
             
             return {
                 'is_duplicate': False,
                 'risk_level': 'LOW',
-                'message': 'No duplicates found'
+                'message': 'No duplicates found',
+                'best_similarity': best_similarity
             }
     
     except Exception as e:
