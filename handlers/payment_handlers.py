@@ -753,16 +753,18 @@ ID: <code>{telegram_user_id}</code>
                     enrollment.payment_status = PaymentStatus.PENDING
                     logger.info(f"⚠️ Still partial for enrollment {enrollment.enrollment_id}")
                 
+                # ✅ Store receipt path (append with comma if exists)
                 existing_receipts = enrollment.receipt_image_path
-
+                
                 if existing_receipts:
-                    # Append new receipt to existing ones
                     enrollment.receipt_image_path = existing_receipts + "," + file_path
                 else:
-                    # First receipt
                     enrollment.receipt_image_path = file_path
                 
+                logger.info(f"📝 Updated receipt path for enrollment {enrollment.enrollment_id}: {enrollment.receipt_image_path}")
+                
                 session.flush()
+                logger.info(f"Commited all {len(enrollment_remaining_balances)} enrollment updates to database")
                 
                 # Create/update transaction
                 if not transaction:
