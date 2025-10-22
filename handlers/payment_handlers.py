@@ -201,6 +201,24 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
     logger.info(f"Checking duplicate against {len(all_previous_receipt_paths)} previous receipts for user {telegram_user_id}")
 
     # Now check duplicates against ALL previous receipts
+    all_previous_receipt_paths = []
+
+    with get_db() as dup_session:
+        current_payment_enrollment_ids = context.user_data.get("current_payment_enrollment_ids", [])
+        resubmission_enrollment_id = context.user_data.get("resubmission_enrollment_id")
+        
+        enrollment_ids_to_check = current_payment_enrollment_ids if not resubmission_enrollment_id else [resubmission_enrollment_id]
+        
+        for eid in enrollment_ids_to_check:
+            enrollment = crud.get_enrollment_by_id(dup_session, eid)
+            if enrollment and enrollment.receipt_image_path:
+                # Split comma-separated paths
+                receipt_paths = enrollment.receipt_image_path.split(',')
+                # Filter out empty strings and add to list
+                all_previous_receipt_paths.extend([path.strip() for path in receipt_paths if path.strip()])
+
+    logger.info(f"Checking duplicate against {len(all_previous_receipt_paths)} previous receipts for user {telegram_user_id}")
+
     from services.duplicate_detector import check_duplicate_submission
     duplicate_image_check = check_duplicate_submission(internal_user_id, temp_path, previous_receipt_paths=all_previous_receipt_paths)
 
@@ -756,17 +774,14 @@ ID: <code>{telegram_user_id}</code>
                     enrollment.payment_status = PaymentStatus.PENDING
                     logger.info(f"⚠️ Still partial for enrollment {enrollment.enrollment_id}")
                 
-                # ✅ STORE MULTIPLE RECEIPTS IN JSON ARRAY
-                existing_receipts = enrollment.receipt_image_path or []
-                if not isinstance(existing_receipts, list):
-                    existing_receipts = [existing_receipts] if existing_receipts else []
-                
-                existing_receipts.append({
-                    'path': file_path,
-                    'amount': amount_for_this_enrollment,
-                    'timestamp': datetime.now().isoformat()
-                })
-                enrollment.receipt_image_path = json.dumps(existing_receipts)
+                existing_receipts = enrollment.receipt_image_path
+
+                if existing_receipts:
+                    # Append new receipt to existing ones
+                    enrollment.receipt_image_path = existing_receipts + "," + file_path
+                else:
+                    # First receipt
+                    enrollment.receipt_image_path = file_path
                 
                 session.flush()
                 

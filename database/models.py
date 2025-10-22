@@ -2,7 +2,7 @@
 SQLAlchemy database models for Course Registration Bot
 """
 from datetime import datetime
-from sqlalchemy import JSON, Column, Integer, BigInteger, String, Float, Boolean, DateTime, ForeignKey, Text, Enum
+from sqlalchemy import Column, Integer, BigInteger, String, Float, Boolean, DateTime, ForeignKey, Text, Enum
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.sql import func
 import enum
@@ -113,7 +113,7 @@ class Transaction(Base):
     
     transaction_id = Column(Integer, primary_key=True, autoincrement=True)
     enrollment_id = Column(Integer, ForeignKey("enrollments.enrollment_id", ondelete="CASCADE"), nullable=False, index=True)
-    receipt_image_path = Column(JSON, nullable=True)  # Changed from String to JSON to store multiple receipts
+    receipt_image_path = Column(String(500), nullable=False)
     submitted_date = Column(DateTime, default=func.now(), nullable=False)
     status = Column(Enum(TransactionStatus), default=TransactionStatus.PENDING, nullable=False)
     admin_reviewed_by = Column(Integer, nullable=True)
