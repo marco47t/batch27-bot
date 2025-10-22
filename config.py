@@ -33,8 +33,26 @@ if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY is not set in .env file")
 
 # Payment Configuration
-EXPECTED_ACCOUNT_NUMBER = os.getenv('EXPECTED_ACCOUNT_NUMBER', '1234567890')
+# Payment Configuration - Multiple Account Numbers Support
+# ✅ SUPPORTS MULTIPLE ACCOUNT NUMBERS (comma-separated in .env)
+BANK_ACCOUNT_NUMBERS = os.getenv('BANK_ACCOUNT_NUMBERS', '1234567890')
 EXPECTED_ACCOUNT_NAME = os.getenv('EXPECTED_ACCOUNT_NAME', 'School Account')
+
+# ✅ Parse multiple accounts into a list
+def get_expected_accounts():
+    """
+    Parse multiple account numbers from env variable
+    Supports formats like: xxxx163485xxxx (masked accounts in receipts)
+    Returns: list of account numbers
+    """
+    accounts_str = os.getenv('BANK_ACCOUNT_NUMBERS', '1234567890')
+    return [acc.strip() for acc in accounts_str.split(',') if acc.strip()]
+
+# Global list of expected account numbers
+EXPECTED_ACCOUNTS = get_expected_accounts()
+
+# Legacy support (use first account for backward compatibility)
+EXPECTED_ACCOUNT_NUMBER = EXPECTED_ACCOUNTS[0] if EXPECTED_ACCOUNTS else '1234567890'
 
 # Database Configuration
 DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///course_bot.db')

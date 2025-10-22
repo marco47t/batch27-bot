@@ -122,7 +122,7 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
     gemini_result = await validate_receipt_with_gemini_ai(
         temp_path,
         expected_amount_for_gemini,
-        config.EXPECTED_ACCOUNT_NUMBER
+        config.EXPECTED_ACCOUNTS
     )
 
     logger.info(f"Gemini validation result: is_valid={gemini_result.get('is_valid')}, amount={gemini_result.get('amount')}, tx_id={gemini_result.get('transaction_id')}")

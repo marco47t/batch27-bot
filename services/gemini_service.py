@@ -21,10 +21,89 @@ genai.configure(api_key=config.GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-2.5-flash')
 
 
+def match_account_number(extracted_account: str, expected_accounts: list) -> tuple:
+    """
+    Match extracted account against multiple expected accounts with partial matching
+    Handles masked formats like xxxx163485xxxx
+    
+    Args:
+        extracted_account: Account number extracted from receipt (may be masked)
+        expected_accounts: List of valid account numbers to check against
+    
+    Returns:
+        tuple: (matched, confidence_score)
+    """
+    if not extracted_account:
+        return False, 0
+    
+    # Clean extracted account (remove spaces, asterisks, x's, dashes)
+    cleaned = ''.join(c for c in extracted_account if c.isdigit())
+    
+    if not cleaned:
+        return False, 0
+    
+    best_confidence = 0
+    matched = False
+    
+    for expected in expected_accounts:
+        expected_clean = expected.strip()
+        
+        # Perfect match
+        if expected_clean == cleaned:
+            logger.info(f"✅ Perfect account match: {expected_clean}")
+            return True, 100
+        
+        # Check if expected number is contained in extracted (handles xxxx163485xxxx)
+        if expected_clean in cleaned:
+            logger.info(f"✅ Account found in masked format: {expected_clean} in {cleaned}")
+            matched = True
+            best_confidence = max(best_confidence, 90)
+            continue
+        
+        # Check if extracted is contained in expected (rare but possible)
+        if cleaned in expected_clean:
+            logger.info(f"✅ Partial account match: {cleaned} in {expected_clean}")
+            matched = True
+            best_confidence = max(best_confidence, 85)
+            continue
+        
+        # Check last 6 digits
+        if len(cleaned) >= 6 and len(expected_clean) >= 6:
+            if cleaned[-6:] == expected_clean[-6:]:
+                logger.info(f"✅ Last 6 digits match: {cleaned[-6:]} == {expected_clean[-6:]}")
+                matched = True
+                best_confidence = max(best_confidence, 80)
+                continue
+        
+        # Check first 6 digits
+        if len(cleaned) >= 6 and len(expected_clean) >= 6:
+            if cleaned[:6] == expected_clean[:6]:
+                logger.info(f"✅ First 6 digits match: {cleaned[:6]} == {expected_clean[:6]}")
+                matched = True
+                best_confidence = max(best_confidence, 75)
+                continue
+        
+        # Fuzzy match: count matching digit positions
+        min_len = min(len(cleaned), len(expected_clean))
+        matches = sum(1 for i in range(min_len) if cleaned[i] == expected_clean[i])
+        
+        if matches >= 4:  # At least 4 consecutive matching digits
+            match_ratio = (matches / max(len(cleaned), len(expected_clean))) * 100
+            if match_ratio >= 40:
+                logger.info(f"⚠️ Fuzzy account match: {matches} digits match ({match_ratio:.1f}%)")
+                matched = True
+                best_confidence = max(best_confidence, int(match_ratio))
+    
+    if not matched:
+        logger.warning(f"❌ No account match found for: {extracted_account} (cleaned: {cleaned})")
+    
+    return matched, best_confidence
+
+
 async def validate_receipt_with_gemini_ai(
-    image_path: str, 
-    expected_amount: float, 
-    expected_account: str, 
+    image_path: str,
+    expected_amount: float,
+    expected_accounts: list,  # ✅ NOW ACCEPTS LIST
     max_retries: int = 1
 ) -> Dict[str, Any]:
     """
@@ -33,7 +112,7 @@ async def validate_receipt_with_gemini_ai(
     Args:
         image_path: Path to the receipt image
         expected_amount: Expected MINIMUM payment amount in SDG
-        expected_account: Expected account number (fuzzy match)
+        expected_accounts: List of expected account numbers (supports multiple + masked formats)
         max_retries: Maximum retry attempts
     
     Returns:
@@ -75,12 +154,25 @@ Analyze this payment receipt and extract information in JSON format:
 
 **FLEXIBLE Validation Rules:**
 
-1. **ACCOUNT NUMBER** (fuzzy match):
-   - Target: {expected_account}
-   - Look for: "To Account", "Recipient", "Beneficiary", "إلى حساب", "المستفيد", "رقم الحساب"
-   - Accept partial matches (last 4-6 digits OK)
-   - Set account_match_confidence based on similarity
-   - Only reject if confidence < 40
+1. **ACCOUNT NUMBER** (flexible partial matching):
+- Target accounts (accept ANY of these): {', '.join(expected_accounts)}
+- Look for fields: "To Account", "Recipient", "Beneficiary", "إلى حساب", "المستفيد", "رقم الحساب"
+- **IMPORTANT FORMATS TO HANDLE:**
+  * Full number: "163485"
+  * Masked format: "xxxx163485xxxx" or "****163485****"
+  * Partial: "...63485" or "163485..."
+  * With spaces: "16 34 85"
+- **Matching Rules:**
+  * Extract ANY continuous digit sequence from account field
+  * Check if it CONTAINS any of the target numbers
+  * Accept if ANY target number is found within the extracted sequence
+  * Set account_match_confidence:
+    - 100: Exact match or full number found
+    - 90: Found in masked format (xxxx{{number}}xxxx)
+    - 70: Partial match (4+ consecutive digits match)
+    - 40: Fuzzy match (some digits match)
+    - 0: No match
+- Only reject if confidence < 40
 
  **AMOUNT** (ACCEPT ANY POSITIVE AMOUNT - Partial payments allowed):
    - Expected: {expected_amount:.2f} SDG
@@ -190,6 +282,26 @@ Return ONLY the JSON object.
             recipient_name = data.get("recipient_name", "")
             tampering_indicators = data.get("tampering_indicators", [])
             days_since_transfer = data.get("days_since_transfer")
+            
+            # ✅ Python-side account validation (double-check Gemini's result)
+            extracted_account = data.get("account_number", "")
+            if extracted_account:
+                matched, confidence = match_account_number(extracted_account, expected_accounts)
+                
+                # Log the match result
+                logger.info(f"🏦 Account validation: extracted='{extracted_account}', matched={matched}, confidence={confidence}%")
+                
+                # Override Gemini's confidence if our matching is better
+                gemini_confidence = data.get("account_match_confidence", 0)
+                if confidence > gemini_confidence:
+                    logger.info(f"   Overriding Gemini confidence {gemini_confidence}% → {confidence}%")
+                    data["account_match_confidence"] = confidence
+                
+                # Update validity based on account match
+                if not matched and confidence < 40:
+                    is_valid = False
+                    tampering_indicators.append(f"Account number mismatch: found '{extracted_account}', expected one of {expected_accounts}")
+                    logger.warning(f"❌ Account validation FAILED: {extracted_account} not in {expected_accounts}")
             
             # Parse datetime
             receipt_datetime = None
