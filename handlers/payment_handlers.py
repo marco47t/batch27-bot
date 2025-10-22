@@ -150,23 +150,6 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
         else:
             logger.warning(f"⚠️ No transaction ID extracted from receipt")
 
-    from services.duplicate_detector import check_duplicate_submission
-    duplicate_image_check = check_duplicate_submission(internal_user_id, temp_path)
-
-    duplicate_check_result["is_duplicate"] = duplicate_image_check.get("is_duplicate", False)
-    duplicate_check_result["similarity_score"] = duplicate_image_check.get("similarity_percentage", 0)
-
-    if duplicate_check_result["is_duplicate"]:
-        logger.warning(f"⚠️ DUPLICATE RECEIPT DETECTED! User {telegram_user_id} tried to reuse receipt")
-        logger.warning(f"   Original owner: {duplicate_image_check.get('original_user_name')} (@{duplicate_image_check.get('original_user_username')})")
-        logger.warning(f"   Similarity: {duplicate_check_result['similarity_score']:.1f}%")
-        logger.warning(f"   Match type: {duplicate_image_check.get('match_type')}")
-        
-        # Add high fraud contribution for duplicates
-        duplicate_check_result["fraud_contribution"] = 55
-        logger.info(f"⚠️ Duplicate detected - adding 55 points to fraud score")
-    else:
-        duplicate_check_result["fraud_contribution"] = 0
     # ===== IMAGE FORENSICS ANALYSIS =====
     from services.image_forensics import analyze_image_metadata
     from services.ela_detector import perform_ela
@@ -182,6 +165,49 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
         "ela_reasons": ela_analysis.get("reasons", [])
     }
     logger.info(f"Image forensics: is_forged={image_forensics_result.get('is_forged')}, ela_score={image_forensics_result.get('ela_score', 0)}")
+
+    # ✅ COLLECT ALL PREVIOUS RECEIPTS FROM ALL ENROLLMENTS (FOR DUPLICATE DETECTION)
+    all_previous_receipt_paths = []
+
+    with get_db() as dup_session:
+        # Get all enrollments for this user to check their previous receipts
+        current_payment_enrollment_ids = context.user_data.get("current_payment_enrollment_ids", [])
+        resubmission_enrollment_id = context.user_data.get("resubmission_enrollment_id")
+        
+        enrollment_ids_to_check = current_payment_enrollment_ids if not resubmission_enrollment_id else [resubmission_enrollment_id]
+        
+        for eid in enrollment_ids_to_check:
+            enrollment = crud.get_enrollment_by_id(dup_session, eid)
+            if enrollment:
+                receipt_data = enrollment.receipt_image_path
+                if receipt_data:
+                    if isinstance(receipt_data, list):
+                        # New format: JSON array of receipts
+                        all_previous_receipt_paths.extend([r['path'] for r in receipt_data if isinstance(r, dict) and 'path' in r])
+                    elif isinstance(receipt_data, str):
+                        # Old format: single string path
+                        all_previous_receipt_paths.append(receipt_data)
+
+    logger.info(f"Checking duplicate against {len(all_previous_receipt_paths)} previous receipts for user {telegram_user_id}")
+
+    # Now check duplicates against ALL previous receipts
+    from services.duplicate_detector import check_duplicate_submission
+    duplicate_image_check = check_duplicate_submission(internal_user_id, temp_path, previous_receipt_paths=all_previous_receipt_paths)
+
+    duplicate_check_result["is_duplicate"] = duplicate_image_check.get("is_duplicate", False)
+    duplicate_check_result["similarity_score"] = duplicate_image_check.get("similarity_percentage", 0)
+
+    if duplicate_check_result["is_duplicate"]:
+        logger.warning(f"⚠️ DUPLICATE RECEIPT DETECTED! User {telegram_user_id} tried to reuse receipt")
+        logger.warning(f"   Original owner: {duplicate_image_check.get('original_user_name')} (@{duplicate_image_check.get('original_user_username')})")
+        logger.warning(f"   Similarity: {duplicate_check_result['similarity_score']:.1f}%")
+        logger.warning(f"   Match type: {duplicate_image_check.get('match_type')}")
+        
+        # Add high fraud contribution for duplicates
+        duplicate_check_result["fraud_contribution"] = 55
+        logger.info(f"⚠️ Duplicate detected - adding 55 points to fraud score")
+    else:
+        duplicate_check_result["fraud_contribution"] = 0
 
     # ===== CALCULATE CONSOLIDATED FRAUD SCORE =====
     fraud_analysis = calculate_consolidated_fraud_score(
@@ -699,34 +725,39 @@ ID: <code>{telegram_user_id}</code>
                 enrollment = item['enrollment']
                 enrollment_remaining = item['remaining']
                 
-                # Calculate proportional amount for this enrollment
+                # Calculate proportional amount
                 if idx == len(enrollment_remaining_balances) - 1:
-                    # Last enrollment gets whatever is left (handles rounding)
                     amount_for_this_enrollment = remaining_to_distribute
                 else:
-                    # Proportional distribution
                     proportion = enrollment_remaining / total_remaining_needed
                     amount_for_this_enrollment = extracted_amount * proportion
                     remaining_to_distribute -= amount_for_this_enrollment
                 
-                # Apply payment to this enrollment
+                # Apply payment
                 current_paid = enrollment.amount_paid or 0
                 enrollment.amount_paid = current_paid + amount_for_this_enrollment
                 
-                logger.info(f"Enrollment {enrollment.enrollment_id}: Adding {amount_for_this_enrollment:.2f} SDG (was {current_paid:.2f}, now {enrollment.amount_paid:.2f}/{enrollment.payment_amount:.2f})")
-                
-                # ✅ CHECK IF THIS ENROLLMENT IS NOW COMPLETE
+                # Check if complete
                 if enrollment.amount_paid >= enrollment.payment_amount:
-                    # FULL PAYMENT REACHED - Mark as VERIFIED
                     enrollment.payment_status = PaymentStatus.VERIFIED
                     enrollment.verification_date = datetime.now()
-                    logger.info(f"✅ Full payment reached for enrollment {enrollment.enrollment_id}: {enrollment.amount_paid:.0f}/{enrollment.payment_amount:.0f}")
+                    logger.info(f"✅ Full payment reached for enrollment {enrollment.enrollment_id}")
                 else:
-                    # Still partial - keep as PENDING
                     enrollment.payment_status = PaymentStatus.PENDING
-                    logger.info(f"⚠️ Still partial for enrollment {enrollment.enrollment_id}: {enrollment.amount_paid:.0f}/{enrollment.payment_amount:.0f}")
+                    logger.info(f"⚠️ Still partial for enrollment {enrollment.enrollment_id}")
                 
-                enrollment.receipt_image_path = file_path
+                # ✅ STORE MULTIPLE RECEIPTS IN JSON ARRAY
+                existing_receipts = enrollment.receipt_image_path or []
+                if not isinstance(existing_receipts, list):
+                    existing_receipts = [existing_receipts] if existing_receipts else []
+                
+                existing_receipts.append({
+                    'path': file_path,
+                    'amount': amount_for_this_enrollment,
+                    'timestamp': datetime.now().isoformat()
+                })
+                enrollment.receipt_image_path = existing_receipts
+                
                 session.flush()
                 
                 # Create/update transaction
@@ -777,27 +808,22 @@ ID: <code>{telegram_user_id}</code>
             all_verified = all(e.payment_status == PaymentStatus.VERIFIED for e in enrollments_to_update)
             
             if all_verified:
-                # PAYMENT COMPLETE! Send success message + group invites
+                # PAYMENT COMPLETE! Send group invites ONLY (no redundant success message)
                 logger.info(f"✅ Payment completed for user {telegram_user_id}")
                 
                 from handlers.group_registration import send_course_invite_link
                 
-                course_data_list = []
+                # ✅ DELETE PROCESSING MESSAGE FIRST
+                try:
+                    if update.message:
+                        await update.message.delete()
+                except Exception as e:
+                    logger.warning(f"Could not delete processing message: {e}")
+                
+                # Send group invites (this function sends its own message with the link)
                 for e in enrollments_to_update:
                     if e.course:
-                        course_data_list.append({
-                            'course_id': e.course.course_id,
-                            'course_name': e.course.course_name
-                        })
-                        # Send course invite
                         await send_course_invite_link(update, context, telegram_user_id, e.course.course_id)
-                
-                # Send success message
-                await update.message.reply_text(
-                    payment_success_message(course_data_list, []),
-                    reply_markup=back_to_main_keyboard(),
-                    parse_mode='HTML'
-                )
                 
                 # Clean up context
                 context.user_data["awaiting_receipt_upload"] = False
