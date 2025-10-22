@@ -344,8 +344,8 @@ async def view_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """View shopping cart"""
     query = update.callback_query
     await query.answer()
-    telegram_user_id = query.from_user.id
     
+    telegram_user_id = query.from_user.id
     logger.info(f"User {telegram_user_id} viewing cart")
     
     with get_db() as session:
@@ -358,29 +358,51 @@ async def view_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             last_name=query.from_user.last_name
         )
         session.flush()
-        
         internal_user_id = db_user.user_id
         
         # Get cart using internal ID
         cart_items = crud.get_user_cart(session, internal_user_id)
         
-        if not cart_items:
+        # ✅ ALSO CHECK FOR PENDING ENROLLMENTS WITH REMAINING BALANCE
+        pending_enrollments = session.query(crud.Enrollment).filter(
+            crud.Enrollment.user_id == internal_user_id,
+            crud.Enrollment.payment_status == PaymentStatus.PENDING
+        ).all()
+        
+        if not cart_items and not pending_enrollments:
             logger.info(f"Cart is empty for user {telegram_user_id}")
             await query.edit_message_text(
-                "🛒 سلة التسوق فارغة\n\nقم بإضافة دورات من قائمة التسجيل.",
+                "🛒 السلة فارغة.\n\nYour cart is empty.",
                 reply_markup=courses_menu_keyboard()
             )
             return
         
+        # Build cart message with remaining balances
         courses = [item.course for item in cart_items]
         total = sum(course.price for course in courses)
-    
-    logger.info(f"User {telegram_user_id} cart: {len(cart_items)} items, total={total}")
-    
-    await query.edit_message_text(
-        cart_message(courses, total),
-        reply_markup=cart_keyboard()
-    )
+        
+        # ✅ ADD PENDING COURSES WITH REMAINING BALANCE
+        pending_items = []
+        for enrollment in pending_enrollments:
+            remaining = enrollment.payment_amount - (enrollment.amount_paid or 0)
+            if remaining > 0:
+                pending_items.append((enrollment.course, remaining))
+                total += remaining
+        
+        # Build message
+        from utils.messages import cart_message
+        message = cart_message(courses, total)
+        
+        # ✅ ADD PENDING COURSES TO MESSAGE
+        if pending_items:
+            message += "\n\n⚠️ **دورات تحتاج إكمال الدفع / Incomplete Payments:**\n"
+            for course, remaining in pending_items:
+                message += f"• {course.course_name}: {remaining:.0f} SDG (متبقي)\n"
+        
+        logger.info(f"User {telegram_user_id} cart: {len(cart_items)} items, total={total}")
+        
+        await query.edit_message_text(message, reply_markup=cart_keyboard(), parse_mode='Markdown')
+
 
 
 async def confirm_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

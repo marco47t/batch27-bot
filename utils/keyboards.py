@@ -126,24 +126,31 @@ def cart_confirmation_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 def my_courses_selection_keyboard(pending_enrollments: List[Enrollment], selected_ids: List[int]) -> InlineKeyboardMarkup:
-    """New keyboard for selecting pending courses to pay for."""
+    """New keyboard for selecting pending courses to pay for - SHOWS REMAINING BALANCE"""
     keyboard = []
-
+    
     # Course selection buttons (checklist style, no numbering)
     for enrollment in pending_enrollments:
         is_selected = enrollment.enrollment_id in selected_ids
         icon = "✅" if is_selected else "⬜"
         course_name = enrollment.course.course_name if enrollment.course else "دورة محذوفة"
-        amount = enrollment.payment_amount or 0.0
-        button_text = f"{icon} {course_name} ({amount:.0f} جنيه)"
+        
+        # ✅ CALCULATE REMAINING AMOUNT (not full amount)
+        total_price = enrollment.payment_amount or 0.0
+        paid_amount = enrollment.amount_paid or 0.0
+        remaining = total_price - paid_amount
+        
+        # Show remaining amount instead of full amount
+        button_text = f"{icon} {course_name} ({remaining:.0f} جنيه)"
         
         # FIXED: Typo `mycourse_` changed to `my_course_` to match handler pattern
         callback_data = (
             f"my_course_deselect_{enrollment.enrollment_id}" if is_selected
             else f"my_course_select_{enrollment.enrollment_id}"
         )
+        
         keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
-
+    
     # Action buttons
     if selected_ids:
         action_buttons = [
@@ -151,12 +158,12 @@ def my_courses_selection_keyboard(pending_enrollments: List[Enrollment], selecte
             InlineKeyboardButton("إلغاء المحدد 🗑️", callback_data="cancel_selected_pending")
         ]
         keyboard.append(action_buttons)
-
-
+    
     # Back button
     keyboard.append([InlineKeyboardButton("→ العودة للقائمة الرئيسية", callback_data=CallbackPrefix.BACK_MAIN)])
-
+    
     return InlineKeyboardMarkup(keyboard)
+
 
 def payment_upload_keyboard() -> InlineKeyboardMarkup:
     """Keyboard during receipt upload process"""
