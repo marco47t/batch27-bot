@@ -203,24 +203,38 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
 
     logger.info(f"Checking duplicate against {len(all_previous_receipt_paths)} previous receipts for user {telegram_user_id}")
 
-    from services.duplicate_detector import check_duplicate_submission
-    duplicate_image_check = check_duplicate_submission(internal_user_id, temp_path, previous_receipt_paths=all_previous_receipt_paths)
+    duplicate_check_result['is_duplicate'] = False
+    duplicate_check_result['similarity_score'] = 0
 
-    duplicate_check_result["is_duplicate"] = duplicate_image_check.get("is_duplicate", False)
-    duplicate_check_result["similarity_score"] = duplicate_image_check.get("similarity_percentage", 0)
+    duplicate_image_check = {}  # ✅ Initialize empty dict for compatibility
 
-    if duplicate_check_result["is_duplicate"]:
-        logger.warning(f"⚠️ DUPLICATE RECEIPT DETECTED! User {telegram_user_id} tried to reuse receipt")
-        logger.warning(f"   Original owner: {duplicate_image_check.get('original_user_name')} (@{duplicate_image_check.get('original_user_username')})")
-        logger.warning(f"   Similarity: {duplicate_check_result['similarity_score']:.1f}%")
-        logger.warning(f"   Match type: {duplicate_image_check.get('match_type')}")
-        
-        # Add high fraud contribution for duplicates
-        duplicate_check_result["fraud_contribution"] = 55
-        logger.info(f"⚠️ Duplicate detected - adding 55 points to fraud score")
-    else:
-        duplicate_check_result["fraud_contribution"] = 0
+    # ✅ If transaction ID duplicate found, get enrollment info from database
+    if duplicate_check_result.get("transaction_id_duplicate"):
+        with get_db() as dup_session:
+            # Find the original enrollment with this transaction ID
+            from database.models import Enrollment, User
+            original_enrollment = session.query(Enrollment).filter(
+                Enrollment.transaction_id == transaction_id
+            ).first()
+            
+            if original_enrollment:
+                original_user = original_enrollment.user
+                duplicate_image_check = {
+                    'original_user_name': f"{original_user.first_name or ''} {original_user.last_name or ''}".strip() or "Unknown",
+                    'original_user_username': original_user.username or "N/A",
+                    'original_telegram_id': original_user.telegram_user_id,
+                    'original_receipt_path': original_enrollment.receipt_image_path.split(',')[0] if original_enrollment.receipt_image_path else None,
+                    'match_type': 'TRANSACTION_ID',
+                    'risk_level': 'HIGH',
+                    'similarity_percentage': 100.0  # Transaction ID match = 100%
+                }
+                duplicate_check_result['is_duplicate'] = True
+                duplicate_check_result['similarity_score'] = 100.0
+                logger.warning(f"⚠️ Transaction ID duplicate: Original user = {duplicate_image_check['original_user_name']} (@{duplicate_image_check['original_user_username']})")
+            else:
+                logger.warning(f"⚠️ Transaction ID duplicate found but could not locate original enrollment")
 
+    logger.info(f"✅ Duplicate check complete (transaction ID only)")
     # ===== CALCULATE CONSOLIDATED FRAUD SCORE =====
     fraud_analysis = calculate_consolidated_fraud_score(
         gemini_result,
