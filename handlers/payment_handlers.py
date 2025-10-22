@@ -1,3 +1,4 @@
+from datetime import datetime
 from telegram import Update, InputFile
 from telegram.ext import ContextTypes
 from utils.keyboards import payment_upload_keyboard, back_to_main_keyboard, failed_receipt_admin_keyboard
@@ -679,13 +680,61 @@ ID: <code>{telegram_user_id}</code>
             transaction = None
             for enrollment in enrollments_to_update:
                 # Update enrollment with partial amount
-                enrollment.amount_paid = (enrollment.amount_paid or 0) + extracted_amount
-                enrollment.payment_status = PaymentStatus.PENDING
+                current_paid = enrollment.amount_paid or 0
+                enrollment.amount_paid = current_paid + extracted_amount
+                
+                # ✅ CHECK IF PAYMENT IS NOW COMPLETE
+                if enrollment.amount_paid >= enrollment.payment_amount:
+                    # FULL PAYMENT REACHED - Mark as VERIFIED
+                    enrollment.payment_status = PaymentStatus.VERIFIED
+                    enrollment.verification_date = datetime.now()
+                    logger.info(f"✅ Full payment reached for enrollment {enrollment.enrollment_id}: {enrollment.amount_paid:.0f}/{enrollment.payment_amount:.0f}")
+                else:
+                    # Still partial - keep as PENDING
+                    enrollment.payment_status = PaymentStatus.PENDING
+                    logger.info(f"⚠️ Still partial for enrollment {enrollment.enrollment_id}: {enrollment.amount_paid:.0f}/{enrollment.payment_amount:.0f}")
+                
+                session.commit()
+
+                # Check if payment is now complete
+                all_verified = all(e.payment_status == PaymentStatus.VERIFIED for e in enrollments_to_update)
+
+                if all_verified:
+                    # PAYMENT COMPLETE - Send success message instead of partial payment message
+                    logger.info(f"✅ Payment completed for user {telegram_user_id}")
+                    
+                    # Import group invitation
+                    from handlers.group_registration import send_course_invite_link
+                    
+                    course_data_list = []
+                    for e in enrollments_to_update:
+                        if e.course:
+                            course_data_list.append({
+                                'course_id': e.course.course_id,
+                                'course_name': e.course.course_name
+                            })
+                            # Send course invite
+                            await send_course_invite_link(update, context, telegram_user_id, e.course.course_id)
+                    
+                    # Send success message
+                    await update.message.reply_text(
+                        payment_success_message(course_data_list, []),
+                        reply_markup=back_to_main_keyboard(),
+                        parse_mode='HTML'
+                    )
+                    
+                    # Clean up context
+                    context.user_data["awaiting_receipt_upload"] = False
+                    # ... rest of cleanup
+                    
+                    return  # Exit early - payment complete!
+
+                # ELSE: Still partial - send partial payment message (existing logic)
+                remaining = expected_amount_for_gemini - extracted_amount
+
+
                 enrollment.receipt_image_path = file_path
                 session.flush()
-                
-                logger.info(f"Updated enrollment {enrollment.enrollment_id}: amount_paid={enrollment.amount_paid:.0f}/{enrollment.payment_amount:.0f}")
-                
                 # Create/update transaction
                 if not transaction:
                     if resubmission_enrollment_id:
