@@ -335,10 +335,6 @@ async def handle_payment_receipt(update: Update, context: ContextTypes.DEFAULT_T
                         continue
                     
                     # ✅ Update enrollment with receipt metadata
-                    enrollment.receipt_transaction_id = transaction_id
-                    enrollment.receipt_transfer_date = gemini_result.get("transfer_datetime")
-                    enrollment.receipt_sender_name = gemini_result.get("sender_name") or gemini_result.get("recipient_name")
-                    
                     logger.info(f"✅ Metadata stored for enrollment {enrollment_id}")
                 
                 logger.info(f"💾 Receipt metadata committed to database")
