@@ -149,16 +149,23 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
         else:
             logger.warning(f"⚠️ No transaction ID extracted from receipt")
 
-    # ===== IMAGE DUPLICATE CHECK =====
     from services.duplicate_detector import check_duplicate_submission
     duplicate_image_check = check_duplicate_submission(internal_user_id, temp_path)
 
     duplicate_check_result["is_duplicate"] = duplicate_image_check.get("is_duplicate", False)
-    duplicate_check_result["similarity_score"] = duplicate_image_check.get("similarity_percentage", 0)  # FIX: correct field name
+    duplicate_check_result["similarity_score"] = duplicate_image_check.get("similarity_percentage", 0)
 
     if duplicate_check_result["is_duplicate"]:
-        logger.warning(f"⚠️ Duplicate image detected: similarity={duplicate_check_result['similarity_score']}%")
-
+        logger.warning(f"⚠️ DUPLICATE RECEIPT DETECTED! User {telegram_user_id} tried to reuse receipt")
+        logger.warning(f"   Original owner: {duplicate_image_check.get('original_user_name')} (@{duplicate_image_check.get('original_user_username')})")
+        logger.warning(f"   Similarity: {duplicate_check_result['similarity_score']:.1f}%")
+        logger.warning(f"   Match type: {duplicate_image_check.get('match_type')}")
+        
+        # Add high fraud contribution for duplicates
+        duplicate_check_result["fraud_contribution"] = 40
+        logger.info(f"⚠️ Duplicate detected - adding 40 points to fraud score")
+    else:
+        duplicate_check_result["fraud_contribution"] = 0
     # ===== IMAGE FORENSICS ANALYSIS =====
     from services.image_forensics import analyze_image_metadata
     from services.ela_detector import perform_ela
@@ -350,6 +357,16 @@ ID: <code>{telegram_user_id}</code>
             for ind in fraud_analysis["fraud_indicators"]:
                 admin_msg += f"- {ind}\n"
             
+            # Add duplicate receipt info if detected
+            if duplicate_check_result.get("is_duplicate"):
+                admin_msg += f"\n🔄 <b>DUPLICATE RECEIPT DETECTED:</b>\n"
+                admin_msg += f"- Original Owner: {duplicate_image_check.get('original_user_name')} (@{duplicate_image_check.get('original_user_username')})\n"
+                admin_msg += f"- Original User ID: <code>{duplicate_image_check.get('original_telegram_id')}</code>\n"
+                admin_msg += f"- Similarity: {duplicate_check_result['similarity_score']:.1f}%\n"
+                admin_msg += f"- Match Type: {duplicate_image_check.get('match_type')}\n"
+                admin_msg += f"- Risk Level: {duplicate_image_check.get('risk_level')}\n"
+
+            
             # Add ELA visual analysis if available
             ela_data = fraud_analysis.get("ela_check", {})
             if ela_data.get("suspicious_regions"):
@@ -381,7 +398,33 @@ ID: <code>{telegram_user_id}</code>
 """
             
             try:
-                # Download from S3 if needed
+                # If duplicate detected, send BOTH receipts to admin
+                if duplicate_check_result.get("is_duplicate"):
+                    # Download and send ORIGINAL receipt first
+                    original_receipt_path = duplicate_image_check.get("original_receipt_path")
+                    if original_receipt_path:
+                        if original_receipt_path.startswith('https://'):
+                            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as orig_temp:
+                                orig_temp_path = orig_temp.name
+                            download_receipt_from_s3(original_receipt_path, orig_temp_path)
+                            original_photo = orig_temp_path
+                        else:
+                            original_photo = original_receipt_path
+                        
+                        # Send original receipt
+                        with open(original_photo, "rb") as f_orig:
+                            await context.bot.send_photo(
+                                chat_id=config.ADMIN_CHAT_ID,
+                                photo=f_orig,
+                                caption=f"📸 <b>ORIGINAL RECEIPT (FIRST SUBMISSION)</b>\n\nFrom: {duplicate_image_check.get('original_user_name')}\nUsername: @{duplicate_image_check.get('original_user_username')}\nTelegram ID: <code>{duplicate_image_check.get('original_telegram_id')}</code>\n\n⬇️ See next photo for duplicate attempt",
+                                parse_mode='HTML'
+                            )
+                        
+                        # Clean up original temp file
+                        if original_receipt_path.startswith('https://') and os.path.exists(original_photo):
+                            os.remove(original_photo)
+                
+                # Download current (duplicate) receipt from S3 if needed
                 if file_path.startswith('https://'):
                     with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as download_temp:
                         download_temp_path = download_temp.name
@@ -390,6 +433,7 @@ ID: <code>{telegram_user_id}</code>
                 else:
                     photo_to_send = file_path
                 
+                # Send current receipt with fraud alert
                 with open(photo_to_send, "rb") as f:
                     await context.bot.send_photo(
                         chat_id=config.ADMIN_CHAT_ID,
@@ -407,6 +451,7 @@ ID: <code>{telegram_user_id}</code>
             except Exception as e:
                 logger.error(f"Failed to send admin fraud alert: {e}")
                 await send_admin_notification(context, admin_msg[:4096])
+
             
             # Clean up context and temp file
             context.user_data["awaiting_receipt_upload"] = False

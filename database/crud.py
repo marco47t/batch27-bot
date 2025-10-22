@@ -852,3 +852,19 @@ def update_course_group_link(session: Session, course_id: int, group_link: str) 
         session.rollback()
         logger.error(f"Failed to update group link for course {course_id}: {e}")
         return False
+
+def get_transaction_with_user_info(session, transaction_id: int):
+    """Get transaction with full user and enrollment details"""
+    from database.models import Transaction, Enrollment, User, Course
+    
+    transaction = session.query(Transaction).join(
+        Enrollment, Transaction.enrollment_id == Enrollment.enrollment_id
+    ).join(
+        User, Enrollment.user_id == User.user_id
+    ).join(
+        Course, Enrollment.course_id == Course.course_id
+    ).filter(
+        Transaction.transaction_id == transaction_id
+    ).first()
+    
+    return transaction
