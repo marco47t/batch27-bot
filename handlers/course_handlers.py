@@ -463,10 +463,27 @@ async def confirm_cart_callback(update: Update, context: ContextTypes.DEFAULT_TY
         # Create pending enrollments using internal ID
         enrollment_ids = []
         for course in courses:
-            enrollment = crud.create_enrollment(session, internal_user_id, course.course_id, course.price)
-            enrollment_ids.append(enrollment.enrollment_id)
-            logger.info(f"Created enrollment {enrollment.enrollment_id} for user {telegram_user_id}, course {course.course_id}")
-        
+            # ✅ CHECK IF PENDING ENROLLMENT ALREADY EXISTS
+            existing_enrollment = session.query(crud.Enrollment).filter(
+                crud.Enrollment.user_id == internal_user_id,
+                crud.Enrollment.course_id == course.course_id,
+                crud.Enrollment.payment_status == PaymentStatus.PENDING
+            ).first()
+            
+            if existing_enrollment:
+                # ✅ REUSE EXISTING PENDING ENROLLMENT (DON'T CREATE NEW ONE)
+                enrollment_ids.append(existing_enrollment.enrollment_id)
+                logger.info(f"Reusing existing pending enrollment {existing_enrollment.enrollment_id} for user {telegram_user_id}, course {course.course_id}, current paid: {existing_enrollment.amount_paid or 0:.0f}")
+            else:
+                # ✅ CREATE NEW ENROLLMENT (ONLY IF NO PENDING ONE EXISTS)
+                enrollment = crud.create_enrollment(session, internal_user_id, course.course_id, course.price)
+                enrollment_ids.append(enrollment.enrollment_id)
+                logger.info(f"Created NEW enrollment {enrollment.enrollment_id} for user {telegram_user_id}, course {course.course_id}")
+
+        session.commit()
+
+        # ✅ CLEAR CART AFTER CONFIRMATION
+        crud.clear_user_cart(session, internal_user_id)
         session.commit()
         
         # Store in context for payment flow
