@@ -53,10 +53,9 @@ async def validate_receipt_with_gemini_ai(
             # Enhanced prompt with multilingual and old receipt detection
             prompt = f"""
 Analyze this payment receipt and extract information in JSON format:
-
 {{
   "account_number": "extracted account/recipient info",
-  "amount": extracted amount as number,
+  "amount": "extracted amount as number",
   "date": "payment date in YYYY-MM-DD format",
   "time": "payment time if visible (HH:MM format)",
   "transaction_id": "unique transaction identifier",
@@ -66,88 +65,72 @@ Analyze this payment receipt and extract information in JSON format:
   "currency": "detected currency",
   "is_valid": true or false,
   "validation_notes": "explanation (max 60 words)",
-  "account_match_confidence": 0-100,
-  "amount_match_confidence": 0-100,
-  "days_since_transfer": estimated days between transfer date and today,
+  "account_match_confidence": "0-100",
+  "amount_match_confidence": "0-100",
+  "days_since_transfer": "estimated days between transfer date and today",
   "tampering_indicators": [],
-  "authenticity_score": 0-100
+  "authenticity_score": "0-100"
 }}
 
-**FLEXIBLE Validation Rules:**
+FLEXIBLE Validation Rules:
 
-1. **ACCOUNT NUMBER** (fuzzy match):
+1. ACCOUNT NUMBER (fuzzy match):
    - Target: {expected_account}
-   - Look for: "To Account", "Recipient", "Beneficiary", "إلى حساب", "المستفيد", "رقم الحساب"
+   - Look for "To Account", "Recipient", "Beneficiary", "المستفيد", "إلى حساب", "الحساب"
    - Accept partial matches (last 4-6 digits OK)
    - Set account_match_confidence based on similarity
-   - Only reject if confidence < 40
+   - Only reject if confidence < 40%
 
-2. **AMOUNT** (accept HIGHER amounts):
-   - Minimum expected: {expected_amount:.2f} SDG
-   - ✅ ACCEPT if amount >= {expected_amount * 0.95:.2f} SDG (allow 5% tolerance for lower)
-   - ✅ ACCEPT ANY amount HIGHER than expected (no upper limit)
+2. AMOUNT - ACCEPT ANY AMOUNT (including partial payments):
+   - Expected: {expected_amount:.2f} SDG
+   - ALWAYS ACCEPT ANY AMOUNT >= 0
+   - PARTIAL PAYMENTS ARE VALID - user will pay remainder later
    - Set amount_match_confidence:
      * 100: Exact match or higher
-     * 95+: Slightly lower but within 5%
-     * <95: Below acceptable threshold
-   - Only reject if amount < {expected_amount * 0.95:.2f}
+     * 95: Close to expected (within 5%)
+     * 50: Partial payment (below expected)
+   - NEVER reject based on amount alone
 
-3. **DATE & TIME EXTRACTION** (multilingual - CRITICAL):
-   - Look for fields labeled:
-     * English: "Date", "Transfer Date", "Transaction Date", "Date/Time"
-     * Arabic: "التاريخ", "تاريخ التحويل", "التاريخ والزمن", "التاريخ والوقت"
+3. DATE/TIME EXTRACTION (multilingual):
+   - Look for "Date", "Transfer Date", "Transaction Date", "التاريخ", "تاريخ التحويل"
    - Extract date in YYYY-MM-DD format
    - Extract time if visible (HH:MM format)
-   - **OLD RECEIPT DETECTION** (IMPORTANT):
-     * Today's date: {current_date_str}
-     * Flag threshold: {old_receipt_threshold} (5 days ago)
-     * Calculate "days_since_transfer": How many days between receipt date and today
-     * If receipt date is BEFORE {old_receipt_threshold} (>5 days old), add to tampering_indicators:
-       "Receipt is {{X}} days old - transfer made on {{date}} but submitted today ({current_date_str})"
+   - Calculate days_since_transfer
 
-4. **TRANSACTION ID** (multilingual extraction - CRITICAL):
-   - Look for ANY unique identifier with labels like:
-     * English: "Transaction ID", "Reference Number", "Receipt Number", "Operation Number", "Ref No", "TXN ID"
-     * Arabic: "رقم العملية", "رقم المرجع", "رقم الإيصال", "الرقم المرجعي", "معرف العملية"
-   - Extract the VALUE (not the label), e.g., if you see "رقم العملية: 123456", extract "123456"
-   - Accept ANY alphanumeric format (numbers, letters, dashes, combinations)
-   - This is MANDATORY for duplicate detection - extract even if format is unusual
+4. TRANSACTION ID (multilingual extraction):
+   - Look for "Transaction ID", "Reference Number", "Receipt Number", "رقم العملية", "رقم المرجع"
+   - Extract the VALUE (e.g., "123456")
+   - Accept ANY alphanumeric format
+   - MANDATORY for duplicate detection
 
-5. **SENDER & RECIPIENT NAMES** (multilingual):
-   - **sender_name**: Look for:
-     * "From", "Sender", "Payer", "Account Holder"
-     * "من", "المرسل", "الدافع", "صاحب الحساب"
-   - **recipient_name**: Look for:
-     * "To", "Recipient", "Beneficiary", "Payee"
-     * "إلى", "المستفيد", "المستلم"
-   - Extract BOTH if visible (one may be missing)
-   - If sender_name is not found, use recipient_name as fallback
+5. SENDER/RECIPIENT NAMES (multilingual):
+   - sender_name: Look for "From", "Sender", "Payer", "من", "المرسل"
+   - recipient_name: Look for "To", "Recipient", "Beneficiary", "إلى", "المستفيد"
+   - Extract BOTH if visible
 
-6. **VISUAL AUTHENTICITY** (lenient):
-   - Only flag OBVIOUS signs of tampering:
+6. VISUAL AUTHENTICITY (lenient):
+   - Only flag OBVIOUS tampering:
      * Clear Photoshop artifacts
      * Completely misaligned text
      * Different fonts in critical fields
-   - Low quality images are NOT tampering
+   - Low quality/screenshots are NOT tampering
 
-**Decision Rules:**
-- Set "is_valid" to TRUE if:
-  * account_match_confidence >= 40
-  * amount >= {expected_amount * 0.95:.2f}
-  * authenticity_score >= 50
+Decision Rules:
+- Set is_valid to TRUE if:
+  * account_match_confidence >= 40% OR account not clearly visible
+  * amount > 0 (ANY amount is valid, even partial)
+  * authenticity_score >= 50%
   * Less than 3 clear tampering indicators
-  * (Old receipts are flagged but NOT automatically rejected)
 
-- Set "is_valid" to FALSE only if:
-  * account_match_confidence < 40 (and account was clearly visible)
-  * amount < {expected_amount * 0.95:.2f}
-  * authenticity_score < 50
+- Set is_valid to FALSE only if:
+  * account_match_confidence < 40% AND account was clearly visible
+  * authenticity_score < 50%
   * 3+ obvious tampering signs
 
-**IMPORTANT**: 
-- Accept receipts even if they're old (just flag in tampering_indicators)
-- Accept ANY amount equal to or HIGHER than expected
-- Extract Arabic field names (رقم العملية, التاريخ والزمن, etc.)
+IMPORTANT:
+- Accept ANY positive amount (partial payments are allowed)
+- Old receipts are flagged but NOT automatically rejected
+- Extract Arabic field names (التاريخ, المبلغ, etc.)
 
 Return ONLY the JSON object.
 """
