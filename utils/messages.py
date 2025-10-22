@@ -86,58 +86,56 @@ def course_detail_message(course, enrollment_count: int = 0) -> str:
     capacity_info = ""
     if course.max_students:
         remaining = course.max_students - enrollment_count
-        capacity_info = f"\n👥 المسجلين: {enrollment_count}/{course.max_students}"
+        capacity_info = f"\n\n👥 [translate:المسجلين]: {enrollment_count}/{course.max_students}"
         if remaining <= 0:
-            capacity_info += "\n⚠️ الدورة ممتلئة حالياً"
+            capacity_info += f"\n⚠️ [translate:الدورة ممتلئة حالياً]"
         elif remaining <= 5:
-            capacity_info += f"\n⚠️ فقط {remaining} مقاعد متبقية!"
+            capacity_info += f"\n⚠️ [translate:فقط] {remaining} [translate:مقاعد متبقية]!"
     
     # Registration period information
     registration_info = ""
     if course.registration_open_date or course.registration_close_date:
-        registration_info = "\n\n📅 فترة التسجيل / Registration Period:"
+        registration_info = "\n\n📅 [translate:فترة التسجيل] / Registration Period:"
         if course.registration_open_date:
             reg_open_str = course.registration_open_date.strftime('%Y-%m-%d')
-            registration_info += f"\n🟢 يفتح / Opens: {reg_open_str}"
-            # Check if registration is open yet
+            registration_info += f"\n🟢 [translate:يفتح] / Opens: {reg_open_str}"
             if datetime.now() < course.registration_open_date:
-                registration_info += " (قريباً / Coming Soon)"
+                registration_info += " ([translate:قريباً] / Coming Soon)"
         
         if course.registration_close_date:
             reg_close_str = course.registration_close_date.strftime('%Y-%m-%d')
-            registration_info += f"\n🔴 يغلق / Closes: {reg_close_str}"
-            # Check if registration has closed
+            registration_info += f"\n🔴 [translate:يغلق] / Closes: {reg_close_str}"
             if datetime.now() > course.registration_close_date:
-                registration_info += " (مغلق / Closed)"
+                registration_info += " ([translate:مغلق] / Closed)"
     
     # Course period information
     course_period_info = ""
     if course.start_date or course.end_date:
-        course_period_info = "\n\n📚 مدة الدورة / Course Duration:"
+        course_period_info = "\n\n📚 [translate:مدة الدورة] / Course Duration:"
         if course.start_date:
             start_str = course.start_date.strftime('%Y-%m-%d')
-            course_period_info += f"\n▶️ البداية / Start: {start_str}"
+            course_period_info += f"\n▶️ [translate:البداية] / Start: {start_str}"
         if course.end_date:
             end_str = course.end_date.strftime('%Y-%m-%d')
-            course_period_info += f"\n🏁 النهاية / End: {end_str}"
+            course_period_info += f"\n🏁 [translate:النهاية] / End: {end_str}"
     
-    # ✅ FIX: Show actual group link or clear message
+    # Group link
     if course.telegram_group_link:
-        group_link_text = f"🔗 رابط المجموعة: {course.telegram_group_link}"
+        group_link_text = f"🔗 [translate:رابط المجموعة]: {course.telegram_group_link}"
     else:
-        group_link_text = "🔗 رابط المجموعة: سيتم إرساله بعد تأكيد الدفع"
+        group_link_text = f"🔗 [translate:رابط المجموعة]: [translate:سيتم إرساله بعد تأكيد الدفع]"
     
-    return f"""
-📖 تفاصيل الدورة
+    return f"""📖 [translate:تفاصيل الدورة]
 
-🎓 الاسم: {course.course_name}
+🎓 [translate:الاسم]: {course.course_name}
 
-📝 الوصف: {course.description or 'لا يوجد وصف'}
+📝 [translate:الوصف]: {course.description or '[translate:لا يوجد وصف]'}
 
-💰 السعر: {course.price:.0f} جنيه سوداني{capacity_info}{registration_info}{course_period_info}
+💰 [translate:السعر]: {course.price:.0f} [translate:جنيه سوداني]{capacity_info}{registration_info}{course_period_info}
 
 {group_link_text}
 """
+
 
 
 def receipt_processing_message() -> str:
@@ -368,16 +366,31 @@ def payment_instructions_message(amount: float) -> str:
 """
 
 
-def cart_message(courses: list, total: float) -> str:
-    if not courses:
-        return "🛒 سلة التسوق فارغة"
+def cart_message(courses: list, total: float, pending_enrollments: list = None) -> str:
+    """Cart message with remaining balance support"""
+    if not courses and not pending_enrollments:
+        return "🛒 [translate:سلة التسوق فارغة]"
     
-    message = "🛒 سلة التسوق:\n\n"
-    for idx, course in enumerate(courses, 1):
-        message += f"{idx}. {course.course_name} - {course.price:.0f} جنيه\n"
+    message = "🛒 [translate:سلة التسوق]:\n\n"
     
-    message += f"\n💰 المجموع: {total:.0f} جنيه سوداني"
+    # New courses in cart
+    if courses:
+        message += "📚 [translate:دورات جديدة]:\n"
+        for idx, course in enumerate(courses, 1):
+            message += f"{idx}. {course.course_name} - {course.price:.0f} [translate:جنيه]\n"
+    
+    # Pending courses with partial payments
+    if pending_enrollments:
+        message += "\n⚠️ [translate:دورات تحتاج إكمال الدفع]:\n"
+        for enrollment in pending_enrollments:
+            paid = enrollment.amount_paid or 0
+            remaining = enrollment.payment_amount - paid
+            if remaining > 0:
+                message += f"• {enrollment.course.course_name}: {remaining:.0f} [translate:جنيه] ([translate:متبقي])\n"
+    
+    message += f"\n💰 [translate:المجموع]: {total:.0f} [translate:جنيه سوداني]"
     return message
+
 
 def receipt_processing_message() -> str:
     """Receipt is being processed"""

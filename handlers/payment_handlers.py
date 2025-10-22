@@ -666,8 +666,8 @@ ID: <code>{telegram_user_id}</code>
         # Allow 5 SDG tolerance
         if result["is_valid"] and extracted_amount < (expected_amount_for_gemini - 5):
             # PARTIAL PAYMENT DETECTED
-            remaining = expected_amount_for_gemini - extracted_amount
-            logger.info(f"⚠️ Partial payment detected for user {telegram_user_id}: paid {extracted_amount:.0f}, expected {expected_amount_for_gemini:.0f}, remaining {remaining:.0f}")
+            remaining_total = expected_amount_for_gemini - extracted_amount
+            logger.info(f"⚠️ Partial payment detected for user {telegram_user_id}: paid {extracted_amount:.0f}, expected {expected_amount_for_gemini:.0f}, remaining {remaining_total:.0f}")
             
             # Get course names for notifications
             course_names = []
@@ -676,11 +676,44 @@ ID: <code>{telegram_user_id}</code>
                     course_names.append(enrollment.course.course_name)
             course_names_str = ", ".join(course_names) if course_names else "N/A"
             
-            transaction = None
+            # ✅ CALCULATE REMAINING BALANCE FOR EACH ENROLLMENT
+            enrollment_remaining_balances = []
+            total_remaining_needed = 0
+            
             for enrollment in enrollments_to_update:
-                # Update enrollment with partial amount
                 current_paid = enrollment.amount_paid or 0
-                enrollment.amount_paid = current_paid + extracted_amount
+                remaining_for_this = enrollment.payment_amount - current_paid
+                enrollment_remaining_balances.append({
+                    'enrollment': enrollment,
+                    'remaining': remaining_for_this
+                })
+                total_remaining_needed += remaining_for_this
+            
+            logger.info(f"Total remaining needed across all enrollments: {total_remaining_needed:.0f} SDG")
+            
+            # ✅ DISTRIBUTE PAYMENT PROPORTIONALLY ACROSS ENROLLMENTS
+            transaction = None
+            remaining_to_distribute = extracted_amount
+            
+            for idx, item in enumerate(enrollment_remaining_balances):
+                enrollment = item['enrollment']
+                enrollment_remaining = item['remaining']
+                
+                # Calculate proportional amount for this enrollment
+                if idx == len(enrollment_remaining_balances) - 1:
+                    # Last enrollment gets whatever is left (handles rounding)
+                    amount_for_this_enrollment = remaining_to_distribute
+                else:
+                    # Proportional distribution
+                    proportion = enrollment_remaining / total_remaining_needed
+                    amount_for_this_enrollment = extracted_amount * proportion
+                    remaining_to_distribute -= amount_for_this_enrollment
+                
+                # Apply payment to this enrollment
+                current_paid = enrollment.amount_paid or 0
+                enrollment.amount_paid = current_paid + amount_for_this_enrollment
+                
+                logger.info(f"Enrollment {enrollment.enrollment_id}: Adding {amount_for_this_enrollment:.2f} SDG (was {current_paid:.2f}, now {enrollment.amount_paid:.2f}/{enrollment.payment_amount:.2f})")
                 
                 # ✅ CHECK IF THIS ENROLLMENT IS NOW COMPLETE
                 if enrollment.amount_paid >= enrollment.payment_amount:
@@ -711,7 +744,7 @@ ID: <code>{telegram_user_id}</code>
                                 status=TransactionStatus.PENDING,
                                 extracted_account=result.get("account_number"),
                                 extracted_amount=extracted_amount,
-                                failure_reason=f"Partial payment: {extracted_amount:.0f}/{expected_amount_for_gemini:.0f} SDG. Remaining: {remaining:.0f} SDG",
+                                failure_reason=f"Partial payment: {extracted_amount:.0f}/{expected_amount_for_gemini:.0f} SDG. Remaining: {remaining_total:.0f} SDG",
                                 gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}"
                             )
                         else:
@@ -722,7 +755,7 @@ ID: <code>{telegram_user_id}</code>
                                 status=TransactionStatus.PENDING,
                                 extracted_account=result.get("account_number"),
                                 extracted_amount=extracted_amount,
-                                failure_reason=f"Partial payment: {extracted_amount:.0f}/{expected_amount_for_gemini:.0f} SDG. Remaining: {remaining:.0f} SDG",
+                                failure_reason=f"Partial payment: {extracted_amount:.0f}/{expected_amount_for_gemini:.0f} SDG. Remaining: {remaining_total:.0f} SDG",
                                 gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}"
                             )
                     else:
@@ -733,7 +766,7 @@ ID: <code>{telegram_user_id}</code>
                             status=TransactionStatus.PENDING,
                             extracted_account=result.get("account_number"),
                             extracted_amount=extracted_amount,
-                            failure_reason=f"Partial payment: {extracted_amount:.0f}/{expected_amount_for_gemini:.0f} SDG. Remaining: {remaining:.0f} SDG",
+                            failure_reason=f"Partial payment: {extracted_amount:.0f}/{expected_amount_for_gemini:.0f} SDG. Remaining: {remaining_total:.0f} SDG",
                             gemini_response=result.get("raw_response", "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}"
                         )
             
@@ -781,30 +814,36 @@ ID: <code>{telegram_user_id}</code>
                 
                 return  # Exit - payment complete!
             
-            # ELSE: Still partial - send partial payment notification
-            # Notify user about partial payment
+            # ELSE: Still partial - send partial payment notification with breakdown
             partial_message = (
                 f"⚠️ **المبلغ المدفوع ناقص**\n"
                 f"💰 **المبلغ المدفوع:** {extracted_amount:.0f} SDG\n"
-                f"✅ تم التحقق من الإيصال\n"
-                f"📊 **المبلغ المطلوب:** {expected_amount_for_gemini:.0f} SDG\n"
-                f"⚠️ **المبلغ المتبقي:** {remaining:.0f} SDG\n\n"
+                f"✅ تم التحقق من الإيصال\n\n"
+                f"📊 **توزيع الدفع:**\n"
+            )
+            
+            # Show breakdown for each course
+            for item in enrollment_remaining_balances:
+                enrollment = item['enrollment']
+                course_name = enrollment.course.course_name if enrollment.course else "Unknown"
+                current_paid = enrollment.amount_paid or 0
+                total_price = enrollment.payment_amount
+                remaining = total_price - current_paid
+                
+                partial_message += f"• {course_name}: {current_paid:.0f}/{total_price:.0f} SDG"
+                if remaining > 0:
+                    partial_message += f" (متبقي: {remaining:.0f})\n"
+                else:
+                    partial_message += f" ✅ مكتمل\n"
+            
+            partial_message += (
+                f"\n📊 **المبلغ المطلوب:** {expected_amount_for_gemini:.0f} SDG\n"
+                f"⚠️ **المبلغ المتبقي:** {remaining_total:.0f} SDG\n\n"
                 f"📝 **لإكمال الدفع:**\n"
                 f"1️⃣ اذهب إلى **دوراتي** من القائمة الرئيسية\n"
-                f"2️⃣ اضغط على الدورة\n"
+                f"2️⃣ اختر الدورة\n"
                 f"3️⃣ اضغط **إكمال الدفع** وأرسل إيصال المبلغ المتبقي\n\n"
-                f"✅ سيتم تفعيل التسجيل بعد استلام المبلغ الكامل\n\n"
-                f"---\n\n"
-                f"⚠️ **Payment Incomplete**\n\n"
-                f"✅ Receipt verified\n\n"
-                f"💰 **Amount Paid:** {extracted_amount:.0f} SDG\n\n"
-                f"📊 **Total Required:** {expected_amount_for_gemini:.0f} SDG\n\n"
-                f"⚠️ **Remaining Amount:** {remaining:.0f} SDG\n\n"
-                f"📝 **To complete payment:**\n\n"
-                f"1️⃣ Go to **دوراتي / My Courses** from main menu\n\n"
-                f"2️⃣ Click on the course\n\n"
-                f"3️⃣ Click **Complete Payment** and send receipt for remaining amount\n\n"
-                f"✅ Enrollment will be activated after full payment"
+                f"✅ سيتم تفعيل التسجيل بعد استلام المبلغ الكامل"
             )
             
             await update.message.reply_text(
