@@ -89,8 +89,12 @@ def download_receipt_from_s3(s3_url: str, local_path: str) -> str:
         raise Exception("S3 storage not configured")
     
     try:
-        # Extract S3 key from URL
-        s3_key = s3_url.split(f"{config.AWS_S3_BUCKET_NAME}.s3.{config.AWS_S3_REGION}.amazonaws.com/")[1]
+        # Extract S3 key from URL - handle any region
+        # Format: https://bucket.s3.region.amazonaws.com/key
+        if '.amazonaws.com/' not in s3_url:
+            raise ValueError(f"Invalid S3 URL format: {s3_url}")
+        
+        s3_key = s3_url.split('.amazonaws.com/')[1]
         
         # Download from S3
         s3_client.download_file(
@@ -119,8 +123,11 @@ def delete_receipt_from_s3(s3_url: str):
         return
     
     try:
-        # Extract S3 key from URL
-        s3_key = s3_url.split(f"{config.AWS_S3_BUCKET_NAME}.s3.{config.AWS_S3_REGION}.amazonaws.com/")[1]
+        # Extract S3 key from URL - handle any region
+        if '.amazonaws.com/' not in s3_url:
+            raise ValueError(f"Invalid S3 URL format: {s3_url}")
+        
+        s3_key = s3_url.split('.amazonaws.com/')[1]
         
         # Delete from S3
         s3_client.delete_object(
