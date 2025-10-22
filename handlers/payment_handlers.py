@@ -501,6 +501,17 @@ ID: <code>{telegram_user_id}</code>
                                 failure_reason=f"FLAGGED FOR REVIEW: " + "; ".join(fraud_analysis["fraud_indicators"]),
                                 gemini_response=str(fraud_analysis)
                             )
+                        else:
+                            transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
+                            transaction = crud.update_transaction(
+                                session,
+                                transaction.transaction_id,
+                                status=TransactionStatus.PENDING,
+                                extracted_account=gemini_result.get("account_number"),
+                                extracted_amount=gemini_result.get("amount"),
+                                failure_reason=f"FLAGGED FOR REVIEW: " + "; ".join(fraud_analysis["fraud_indicators"]),
+                                gemini_response=str(fraud_analysis)
+                            )
                     else:
                         transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
                         transaction = crud.update_transaction(
@@ -517,24 +528,18 @@ ID: <code>{telegram_user_id}</code>
             
             # Notify user about manual review
             review_msg = f"""
-⏳ **قيد المراجعة**
+        ⏳ **قيد المراجعة**
+        تم استلام الإيصال وسيتم مراجعته من قبل الإدارة.
+        ⏱️ سيتم الرد خلال 24-48 ساعة.
+        شكراً لتفهمك.
 
-تم استلام الإيصال وسيتم مراجعته من قبل الإدارة.
+        ---
 
-⏱️ سيتم الرد خلال 24-48 ساعة.
-
-شكراً لتفهمك.
-
----
-⏳ **Under Review**
-
-Receipt received and will be reviewed by administration.
-
-⏱️ You will receive a response within 24-48 hours.
-
-Thank you for your patience.
-"""
-            
+        ⏳ **Under Review**
+        Receipt received and will be reviewed by administration.
+        ⏱️ You will receive a response within 24-48 hours.
+        Thank you for your patience.
+        """
             await update.message.reply_text(review_msg, reply_markup=back_to_main_keyboard(), parse_mode='HTML')
             
             # Send admin notification for manual review
@@ -545,35 +550,71 @@ Thank you for your patience.
             course_names_str = ", ".join(course_names) if course_names else "N/A"
             
             review_admin_msg = f"""
-⚠️ MANUAL REVIEW REQUIRED
+        ⚠️ <b>MANUAL REVIEW REQUIRED</b>
 
-👤 User Information:
-Name: {user.first_name} {user.last_name or ''}
-Username: @{user.username or 'N/A'}
-ID: {telegram_user_id}
+        👤 <b>User Information:</b>
+        Name: {user.first_name} {user.last_name or ''}
+        Username: @{user.username or 'N/A'}
+        ID: <code>{telegram_user_id}</code>
 
-🟡 Fraud Score: {fraud_analysis['fraud_score']}/100
-⚠️ Risk Level: {fraud_analysis['risk_level']}
+        🟡 <b>Fraud Score: {fraud_analysis['fraud_score']}/100</b>
+        ⚠️ <b>Risk Level: {fraud_analysis['risk_level']}</b>
 
-⚠️ Warning Indicators:
-"""
+        <b>⚠️ Warning Indicators:</b>
+        """
+            
             for ind in fraud_analysis["fraud_indicators"]:
                 review_admin_msg += f"• {ind}\n"
             
+            # ADD DUPLICATE DETECTION INFO
+            if duplicate_check_result.get('is_duplicate'):
+                review_admin_msg += f"\n<b>🚨 DUPLICATE RECEIPT DETECTED</b>\n"
+                review_admin_msg += f"• <b>Original Owner:</b> {duplicate_image_check.get('original_user_name')} (@{duplicate_image_check.get('original_user_username')})\n"
+                review_admin_msg += f"• <b>Original User ID:</b> <code>{duplicate_image_check.get('original_telegram_id')}</code>\n"
+                review_admin_msg += f"• <b>Similarity:</b> {duplicate_check_result.get('similarity_score', 0):.1f}%\n"
+                review_admin_msg += f"• <b>Match Type:</b> {duplicate_image_check.get('match_type')}\n"
+                review_admin_msg += f"• <b>Risk Level:</b> {duplicate_image_check.get('risk_level')}\n"
+            
             review_admin_msg += f"""
-📄 Extracted Data:
-• Account: {gemini_result.get('account_number', 'N/A')}
-• Amount: {(gemini_result.get('amount') or 0):.2f} {gemini_result.get('currency', 'SDG')}
-• Expected: {expected_amount_for_gemini:.2f} SDG
+        📄 <b>Extracted Data:</b>
+        • Account: {gemini_result.get('account_number', 'N/A')}
+        • Amount: {(gemini_result.get('amount') or 0):.2f} {gemini_result.get('currency', 'SDG')}
+        • Expected: {expected_amount_for_gemini:.2f} SDG
 
-📚 Courses: {course_names_str}
-📝 Enrollment IDs: {enrollment_ids_str}
+        📚 <b>Courses:</b> {course_names_str}
+        📝 <b>Enrollment IDs:</b> {enrollment_ids_str}
 
-🔍 Action Required: Please review and approve/reject manually.
-"""
+        🔍 <b>Action Required:</b> Please review and approve/reject manually.
+        """
             
             try:
-                # Download from S3 if needed
+                # If duplicate detected, send BOTH receipts
+                if duplicate_check_result.get("is_duplicate"):
+                    # Download and send ORIGINAL receipt first
+                    original_receipt_path = duplicate_image_check.get("original_receipt_path")
+                    if original_receipt_path:
+                        if original_receipt_path.startswith('https://'):
+                            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as orig_temp:
+                                orig_temp_path = orig_temp.name
+                            download_receipt_from_s3(original_receipt_path, orig_temp_path)
+                            original_photo = orig_temp_path
+                        else:
+                            original_photo = original_receipt_path
+                        
+                        # Send original receipt
+                        with open(original_photo, "rb") as f_orig:
+                            await context.bot.send_photo(
+                                chat_id=config.ADMIN_CHAT_ID,
+                                photo=f_orig,
+                                caption=f"📸 <b>ORIGINAL RECEIPT</b>\n\n👤 Original Owner: {duplicate_image_check.get('original_user_name')}\n🆔 User ID: <code>{duplicate_image_check.get('original_telegram_id')}</code>\n\n⬇️ See next photo for duplicate attempt",
+                                parse_mode='HTML'
+                            )
+                        
+                        # Clean up original temp file
+                        if original_receipt_path.startswith('https://') and os.path.exists(original_photo):
+                            os.remove(original_photo)
+                
+                # Download current (duplicate or normal) receipt from S3 if needed
                 if file_path.startswith('https://'):
                     with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as download_temp:
                         download_temp_path = download_temp.name
