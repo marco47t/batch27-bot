@@ -167,18 +167,23 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
     }
     logger.info(f"Image forensics: is_forged={image_forensics_result.get('is_forged')}, ela_score={image_forensics_result.get('ela_score', 0)}")
 
-    # ✅ COLLECT ALL PREVIOUS RECEIPTS FROM ALL ENROLLMENTS (FOR DUPLICATE DETECTION)
+    # ✅ COLLECT ALL PREVIOUS RECEIPTS FROM CURRENT USER'S ENROLLMENTS (FOR SAME-USER DUPLICATE CHECK)
     all_previous_receipt_paths = []
 
     with get_db() as dup_session:
-        # Get all enrollments for this user to check their previous receipts
         current_payment_enrollment_ids = context.user_data.get("current_payment_enrollment_ids", [])
         resubmission_enrollment_id = context.user_data.get("resubmission_enrollment_id")
         
         enrollment_ids_to_check = current_payment_enrollment_ids if not resubmission_enrollment_id else [resubmission_enrollment_id]
+        
+        for eid in enrollment_ids_to_check:
+            enrollment = crud.get_enrollment_by_id(dup_session, eid)
+            if enrollment and enrollment.receipt_image_path:
+                # ✅ Split comma-separated paths
+                receipt_paths = [p.strip() for p in enrollment.receipt_image_path.split(',') if p.strip()]
+                all_previous_receipt_paths.extend(receipt_paths)
 
-    logger.info(f"Checking duplicate against {len(all_previous_receipt_paths)} previous receipts for user {telegram_user_id}")
-
+    logger.info(f"Checking duplicate against {len(all_previous_receipt_paths)} previous receipts from SAME user for re-submission check")
     # Now check duplicates against ALL previous receipts
     all_previous_receipt_paths = []
 
