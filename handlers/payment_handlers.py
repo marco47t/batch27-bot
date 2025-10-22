@@ -952,15 +952,22 @@ ID: <code>{telegram_user_id}</code>
             if result["is_valid"]:
                 enrollment.amount_paid = enrollment.payment_amount
             
+            # ✅ APPEND RECEIPT PATH (don't overwrite)
+            existing_receipts = enrollment.receipt_image_path
+            if existing_receipts:
+                new_receipt_path = existing_receipts + "," + file_path
+            else:
+                new_receipt_path = file_path
+            
             crud.update_enrollment_status(
                 session,
                 enrollment.enrollment_id,
                 payment_status,
-                receipt_path=file_path,
+                receipt_path=new_receipt_path,  # ✅ USE APPENDED PATH
                 admin_notes=result.get("reason") if not result["is_valid"] else f"Fraud score: {fraud_analysis['fraud_score']}"
             )
             
-            logger.info(f"Updated enrollment {enrollment.enrollment_id} status to {payment_status}")
+            logger.info(f"📝 Updated receipt path for enrollment {enrollment.enrollment_id}: {new_receipt_path}")
             
             if not transaction:
                 if resubmission_enrollment_id:
