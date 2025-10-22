@@ -63,18 +63,30 @@ def calculate_consolidated_fraud_score(
     
     # === DUPLICATE DETECTION (30 points) ===
     if duplicate_check_result.get("is_duplicate"):
-        fraud_score += 30
         similarity = duplicate_check_result.get("similarity_score", 0)
-        fraud_indicators.append(f"Duplicate receipt detected (similarity: {similarity}%)")
-    
-    # ✅ NEW: Transaction ID duplicate check
+        
+        # Scale score based on similarity percentage
+        if similarity >= 95:
+            duplicate_points = 50  # Near-exact match = AUTO-REJECT
+        elif similarity >= 90:
+            duplicate_points = 45  # 90-95% = Very likely reject
+        elif similarity >= 85:
+            duplicate_points = 35  # 85-90% = Manual review
+        elif similarity >= 75:
+            duplicate_points = 25  # 75-85% = Manual review
+        else:
+            duplicate_points = 15  # <75% = Low risk
+        
+    fraud_score += duplicate_points
+    fraud_indicators.append(f"Duplicate receipt detected (similarity: {similarity:.1f}%)")
+
+# Transaction ID duplicate check
     if duplicate_check_result.get("transaction_id_duplicate"):
         fraud_score += 25
         fraud_indicators.append(f"Transaction ID already used: {duplicate_check_result.get('duplicate_transaction_id')}")
-    
-    # Cap fraud score at 100
-    fraud_score = min(100, fraud_score)
-    
+        # Cap fraud score at 100
+        fraud_score = min(100, fraud_score)
+        
     # Determine risk level
     if fraud_score >= 70:
         risk_level = "HIGH"
