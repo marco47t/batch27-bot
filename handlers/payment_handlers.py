@@ -722,7 +722,7 @@ ID: <code>{telegram_user_id}</code>
                 })
                 total_remaining_needed += remaining_for_this
             
-            logger.info(f"Total remaining needed across all enrollments: {total_remaining_needed:.0f} SDG")
+            logger.info(f"Total remaining needed across all enrollments: {total_remaining_needed:.2f}")
             
             # ✅ DISTRIBUTE PAYMENT PROPORTIONALLY ACROSS ENROLLMENTS
             transaction = None
@@ -753,7 +753,7 @@ ID: <code>{telegram_user_id}</code>
                     enrollment.payment_status = PaymentStatus.PENDING
                     logger.info(f"⚠️ Still partial for enrollment {enrollment.enrollment_id}")
                 
-                # ✅ Store receipt path (append with comma if exists)
+                # Store receipt path
                 existing_receipts = enrollment.receipt_image_path
                 
                 if existing_receipts:
@@ -761,13 +761,14 @@ ID: <code>{telegram_user_id}</code>
                 else:
                     enrollment.receipt_image_path = file_path
                 
-                logger.info(f"📝 Updated receipt path for enrollment {enrollment.enrollment_id}: {enrollment.receipt_image_path}")
+                logger.info(f"📝 Updated receipt path for enrollment {enrollment.enrollment_id}")
+            
+                # ✅ FLUSH ONCE after loop ends (OUTDENTED - same level as 'for')
+            session.flush()
+            logger.info(f"💾 Committed all {len(enrollment_remaining_balances)} enrollment updates to database")
                 
-                session.flush()
-                logger.info(f"Commited all {len(enrollment_remaining_balances)} enrollment updates to database")
-                
-                # Create/update transaction
-                if not transaction:
+            # Create/update transaction
+            if not transaction:
                     if resubmission_enrollment_id:
                         from database.models import Transaction
                         transaction = session.query(Transaction).filter(
