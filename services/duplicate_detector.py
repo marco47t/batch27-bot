@@ -1,6 +1,5 @@
 # services/duplicate_detector.py
 import hashlib
-import os
 import cv2
 import numpy as np
 from typing import Dict, Any, Optional
@@ -11,23 +10,43 @@ logger = logging.getLogger(__name__)
 
 
 def compute_image_hash(image_path: str) -> str:
-    """Compute exact file hash"""
+    """Compute perceptual hash that's resistant to minor edits"""
+    try:
+        img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        img_resized = cv2.resize(img, (64, 64))
+        dct = cv2.dct(np.float32(img_resized))
+        dct_low = dct[:8, :8]
+        median = np.median(dct_low)
+        
+        hash_str = ""
+        for i in range(8):
+            for j in range(8):
+                hash_str += '1' if dct_low[i, j] > median else '0'
+        return hash_str
+    except Exception as e:
+        logger.error(f"Hash computation failed: {e}")
+        return ""
+
+
+def compute_file_hash(image_path: str) -> str:
+    """Compute exact file hash (supports S3 URLs)"""
     temp_file = None
     try:
         # If S3 URL, download first
         if image_path.startswith('http'):
             import tempfile
+            import os
             from utils.s3_storage import download_receipt_from_s3
             with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
                 temp_file = tmp.name
             download_receipt_from_s3(image_path, temp_file)
             image_path = temp_file
-            
+        
         with open(image_path, 'rb') as f:
             return hashlib.sha256(f.read()).hexdigest()
     except Exception as e:
         logger.error(f"File hash failed: {e}")
-        return None
+        return ""
     finally:
         # Clean up temp file
         if temp_file and os.path.exists(temp_file):
@@ -36,16 +55,6 @@ def compute_image_hash(image_path: str) -> str:
             except:
                 pass
 
-
-
-def compute_file_hash(image_path: str) -> str:
-    """Compute exact file hash"""
-    try:
-        with open(image_path, 'rb') as f:
-            return hashlib.sha256(f.read()).hexdigest()
-    except Exception as e:
-        logger.error(f"File hash failed: {e}")
-        return ""
 
 
 def hamming_distance(hash1: str, hash2: str) -> int:
