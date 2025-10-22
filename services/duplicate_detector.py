@@ -1,4 +1,5 @@
 # services/duplicate_detector.py
+
 import hashlib
 import cv2
 import numpy as np
@@ -11,7 +12,6 @@ import os
 import tempfile
 
 logger = logging.getLogger(__name__)
-
 
 def compute_multi_hash(image_path: str) -> Dict[str, str]:
     """
@@ -27,33 +27,23 @@ def compute_multi_hash(image_path: str) -> Dict[str, str]:
                 temp_file = tmp.name
             download_receipt_from_s3(image_path, temp_file)
             image_path = temp_file
-        
+
         # Load image with PIL for imagehash library
         img_pil = Image.open(image_path)
         
         # Compute multiple hash types (more resistant to edits)
         hashes = {
-            'phash': str(imagehash.phash(img_pil, hash_size=16)),      # Perceptual hash (16x16 = 256 bits)
-            'dhash': str(imagehash.dhash(img_pil, hash_size=16)),      # Difference hash
-            'whash': str(imagehash.whash(img_pil, hash_size=16)),      # Wavelet hash
-            'average': str(imagehash.average_hash(img_pil, hash_size=16))  # Average hash
+            'phash': str(imagehash.phash(img_pil, hash_size=16)),  # Perceptual hash (16x16 = 256 bits)
+            'dhash': str(imagehash.dhash(img_pil, hash_size=16)),  # Difference hash
+            'whash': str(imagehash.whash(img_pil, hash_size=16)),  # Wavelet hash
         }
         
-        # Also compute color histogram for content similarity
-        img_cv = cv2.imread(image_path)
-        if img_cv is not None:
-            # Resize and compute histogram
-            img_resized = cv2.resize(img_cv, (256, 256))
-            hist = cv2.calcHist([img_resized], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
-            hist = cv2.normalize(hist, hist).flatten()
-            hashes['histogram'] = hashlib.sha256(hist.tobytes()).hexdigest()[:32]
-        
         return hashes
-    
     except Exception as e:
-        logger.error(f"Multi-hash computation failed: {e}")
-        return {}
+        logger.error(f"Failed to compute hash for {image_path}: {e}")
+        return None
     finally:
+        # Clean up temp file if created
         if temp_file and os.path.exists(temp_file):
             try:
                 os.remove(temp_file)
@@ -61,11 +51,11 @@ def compute_multi_hash(image_path: str) -> Dict[str, str]:
                 pass
 
 
-def compute_file_hash(image_path: str) -> str:
-    """Compute exact file hash (supports S3 URLs)"""
+def compute_file_hash(image_path: str) -> Optional[str]:
+    """Compute exact file hash (SHA256) for exact duplicate detection"""
     temp_file = None
     try:
-        # If S3 URL, download first
+        # Download if S3 URL
         if image_path.startswith('http'):
             from utils.s3_storage import download_receipt_from_s3
             with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
@@ -76,8 +66,8 @@ def compute_file_hash(image_path: str) -> str:
         with open(image_path, 'rb') as f:
             return hashlib.sha256(f.read()).hexdigest()
     except Exception as e:
-        logger.error(f"File hash failed: {e}")
-        return ""
+        logger.error(f"Failed to compute file hash: {e}")
+        return None
     finally:
         if temp_file and os.path.exists(temp_file):
             try:
@@ -88,52 +78,61 @@ def compute_file_hash(image_path: str) -> str:
 
 def calculate_similarity(hash1: Dict[str, str], hash2: Dict[str, str]) -> Tuple[float, str]:
     """
-    Calculate similarity between two multi-hash sets
-    Returns: (similarity_percentage, match_type)
+    Calculate similarity between two multi-hash dictionaries
+    Returns (similarity_percentage, match_type)
     """
-    if not hash1 or not hash2:
-        return 0.0, "UNKNOWN"
-    
-    similarities = []
-    
-    # Compare each hash type
-    for hash_type in ['phash', 'dhash', 'whash', 'average']:
-        if hash_type in hash1 and hash_type in hash2:
-            h1 = imagehash.hex_to_hash(hash1[hash_type])
-            h2 = imagehash.hex_to_hash(hash2[hash_type])
-            # Calculate similarity (lower hamming distance = more similar)
-            hamming_dist = h1 - h2
-            max_bits = 256  # 16x16 hash
-            similarity = ((max_bits - hamming_dist) / max_bits) * 100
-            similarities.append(similarity)
-    
-    if not similarities:
-        return 0.0, "UNKNOWN"
-    
-    # Use average similarity across all hash types
-    avg_similarity = sum(similarities) / len(similarities)
-    
-    # Determine match type based on similarity
-    if avg_similarity >= 98:
-        return avg_similarity, "EXACT"
-    elif avg_similarity >= 85:
-        return avg_similarity, "VERY_SIMILAR"
-    elif avg_similarity >= 75:
-        return avg_similarity, "SIMILAR"
-    else:
-        return avg_similarity, "DIFFERENT"
+    try:
+        # Calculate similarity for each hash type
+        similarities = {}
+        
+        for hash_type in ['phash', 'dhash', 'whash']:
+            if hash_type in hash1 and hash_type in hash2:
+                h1 = imagehash.hex_to_hash(hash1[hash_type])
+                h2 = imagehash.hex_to_hash(hash2[hash_type])
+                
+                # Calculate hamming distance (lower = more similar)
+                distance = h1 - h2
+                max_distance = len(hash1[hash_type]) * 4  # 4 bits per hex char
+                
+                # Convert to similarity percentage
+                similarity = max(0, (1 - distance / max_distance) * 100)
+                similarities[hash_type] = similarity
+        
+        if not similarities:
+            return 0.0, 'NONE'
+        
+        # Use the MAXIMUM similarity (most optimistic)
+        max_similarity = max(similarities.values())
+        
+        # Determine match type
+        if max_similarity >= 95:
+            match_type = 'EXACT'
+        elif max_similarity >= 85:
+            match_type = 'VERY_HIGH'
+        elif max_similarity >= 75:
+            match_type = 'HIGH'
+        elif max_similarity >= 60:
+            match_type = 'MEDIUM'
+        else:
+            match_type = 'LOW'
+        
+        return max_similarity, match_type
+        
+    except Exception as e:
+        logger.error(f"Similarity calculation failed: {e}")
+        return 0.0, 'ERROR'
 
 
 def check_duplicate_submission(user_id: int, image_path: str, similarity_threshold: float = 75.0, previous_receipt_paths: list = None) -> Dict[str, Any]:
     """
-    Enhanced duplicate detection using multiple perceptual hashing algorithms
-    Now supports checking against specific previous receipt paths (comma-separated support)
+    Enhanced duplicate detection - checks ALL enrollments in database
+    Supports comma-separated receipt paths
     
     Args:
         user_id: Current user ID
         image_path: Path or URL to receipt image
         similarity_threshold: Minimum similarity % to flag as duplicate (default: 75%)
-        previous_receipt_paths: Optional list of comma-separated receipt paths to check against
+        previous_receipt_paths: Optional list of receipt paths from same user (for re-submission check)
     
     Returns dict with duplicate detection results
     """
@@ -152,11 +151,10 @@ def check_duplicate_submission(user_id: int, image_path: str, similarity_thresho
             }
         
         with get_db() as session:
-            from database.models import Transaction, Enrollment, User
+            from database.models import Enrollment, User
             
-            # ✅ FIRST: Check against provided previous receipts (for same user's partial payments)
+            # ✅ FIRST: Check against same user's previous receipts (re-submission check)
             if previous_receipt_paths:
-                # ✅ NEW: Split comma-separated paths
                 expanded_paths = []
                 for path in previous_receipt_paths:
                     if path:
@@ -165,7 +163,7 @@ def check_duplicate_submission(user_id: int, image_path: str, similarity_thresho
                 logger.info(f"Checking against {len(expanded_paths)} previous receipts from same user")
                 
                 for prev_path in expanded_paths:
-                    # Check exact duplicate (file hash)
+                    # Check exact duplicate
                     prev_file_hash = compute_file_hash(prev_path)
                     if prev_file_hash and prev_file_hash == file_hash:
                         return {
@@ -174,7 +172,7 @@ def check_duplicate_submission(user_id: int, image_path: str, similarity_thresho
                             'match_type': 'EXACT',
                             'similarity_percentage': 100.0,
                             'original_receipt_path': prev_path,
-                            'message': '⚠️ You already submitted this exact receipt before. Please submit a NEW receipt for the remaining amount.'
+                            'message': '⚠️ You already submitted this exact receipt. Please submit a NEW receipt for the remaining amount.'
                         }
                     
                     # Check perceptual similarity
@@ -189,32 +187,37 @@ def check_duplicate_submission(user_id: int, image_path: str, similarity_thresho
                                 'match_type': match_type,
                                 'similarity_percentage': similarity,
                                 'original_receipt_path': prev_path,
-                                'message': f'⚠️ This receipt is {similarity:.1f}% similar to one you already submitted. Please submit a NEW receipt.'
+                                'message': f'⚠️ This receipt is {similarity:.1f}% similar to one you already submitted.'
                             }
             
-            # ✅ NEW: Check ALL enrollments in database (split comma-separated paths)
+            # ✅ SECOND: Check ALL enrollments in database (cross-user duplicate detection)
             all_enrollments = session.query(Enrollment).join(User).all()
+            
+            logger.info(f"🔍 Checking duplicate against {len(all_enrollments)} total enrollments in database")
             
             best_match = None
             best_similarity = 0.0
+            checked_count = 0
             
             for enrollment in all_enrollments:
                 if not enrollment.receipt_image_path:
                     continue
                 
-                # ✅ NEW: Split comma-separated receipt paths
+                # ✅ Split comma-separated receipt paths
                 receipt_paths = [p.strip() for p in enrollment.receipt_image_path.split(',') if p.strip()]
+                checked_count += len(receipt_paths)
                 
                 for receipt_path in receipt_paths:
-                    # Skip if this is current user's own enrollment
+                    # Skip current user's own receipts (already checked above)
                     if enrollment.user_id == user_id:
                         continue
                     
                     original_user = enrollment.user
                     
-                    # Check exact duplicate (file hash)
+                    # Check exact duplicate
                     prev_file_hash = compute_file_hash(receipt_path)
                     if prev_file_hash and prev_file_hash == file_hash:
+                        logger.warning(f"🚨 EXACT DUPLICATE: Enrollment {enrollment.enrollment_id}, User {original_user.telegram_user_id}")
                         return {
                             'is_duplicate': True,
                             'risk_level': 'HIGH',
@@ -226,7 +229,7 @@ def check_duplicate_submission(user_id: int, image_path: str, similarity_thresho
                             'original_user_username': original_user.username or "N/A",
                             'original_telegram_id': original_user.telegram_user_id,
                             'original_receipt_path': receipt_path,
-                            'message': 'Exact duplicate - identical file submitted before by another user'
+                            'message': 'Exact duplicate - identical receipt submitted by another user'
                         }
                     
                     # Check perceptual similarity
@@ -248,11 +251,14 @@ def check_duplicate_submission(user_id: int, image_path: str, similarity_thresho
                                 'original_user_username': original_user.username or "N/A",
                                 'original_telegram_id': original_user.telegram_user_id,
                                 'original_receipt_path': receipt_path,
-                                'message': f'Duplicate detected ({similarity:.1f}% similar) - receipt already used by another user'
+                                'message': f'Duplicate detected ({similarity:.1f}% similar) - receipt used by another user'
                             }
+            
+            logger.info(f"✅ Duplicate check complete: {checked_count} receipts checked from {len(all_enrollments)} enrollments")
             
             # Return best match if above threshold
             if best_match and best_match['is_duplicate']:
+                logger.warning(f"⚠️ SIMILAR DUPLICATE: {best_match['similarity_percentage']:.1f}% match")
                 return best_match
             
             return {
@@ -263,10 +269,9 @@ def check_duplicate_submission(user_id: int, image_path: str, similarity_thresho
             }
     
     except Exception as e:
-        logger.error(f"Duplicate check failed: {e}")
+        logger.error(f"Duplicate check failed: {e}", exc_info=True)
         return {
             'is_duplicate': False,
             'risk_level': 'UNKNOWN',
             'message': f'Duplicate check error: {str(e)}'
         }
-
