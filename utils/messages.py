@@ -7,6 +7,7 @@ from datetime import datetime
 from database.models import Course, Enrollment, Transaction
 import config
 
+
 def welcome_message() -> str:
     """Welcome message for new users"""
     return """
@@ -22,6 +23,7 @@ def welcome_message() -> str:
 
 اختر أحد الخيارات للبدء!
 """
+
 
 def about_bot_message() -> str:
     """About the bot message"""
@@ -43,6 +45,7 @@ def about_bot_message() -> str:
 استمتع بتجربتك! 🎉
 """
 
+
 def courses_menu_message() -> str:
     return """
 📚 قائمة الدورات
@@ -52,6 +55,7 @@ def courses_menu_message() -> str:
 1️⃣ تفاصيل الدورات - عرض معلومات مفصلة عن كل دورة
 2️⃣ التسجيل في الدورات - اختر الدورات وأضفها للسلة
 """
+
 
 def course_list_message(courses: list, enrollment_counts: dict = None) -> str:
     """Display list of courses with capacity info"""
@@ -78,6 +82,7 @@ def course_list_message(courses: list, enrollment_counts: dict = None) -> str:
     
     return message
 
+
 def course_detail_message(course, enrollment_count: int = 0) -> str:
     """Display detailed course information with all dates"""
     from datetime import datetime
@@ -86,60 +91,62 @@ def course_detail_message(course, enrollment_count: int = 0) -> str:
     capacity_info = ""
     if course.max_students:
         remaining = course.max_students - enrollment_count
-        capacity_info = f"\n\n👥 [translate:المسجلين]: {enrollment_count}/{course.max_students}"
+        capacity_info = f"\n\n👥 المسجلين: {enrollment_count}/{course.max_students}"
         if remaining <= 0:
-            capacity_info += f"\n⚠️ [translate:الدورة ممتلئة حالياً]"
+            capacity_info += f"\n⚠️ الدورة ممتلئة حالياً"
         elif remaining <= 5:
-            capacity_info += f"\n⚠️ [translate:فقط] {remaining} [translate:مقاعد متبقية]!"
+            capacity_info += f"\n⚠️ فقط {remaining} مقاعد متبقية!"
     
     # Registration period information
     registration_info = ""
     if course.registration_open_date or course.registration_close_date:
-        registration_info = "\n\n📅 [translate:فترة التسجيل] / Registration Period:"
+        registration_info = "\n\n📅 فترة التسجيل / Registration Period:"
         if course.registration_open_date:
             reg_open_str = course.registration_open_date.strftime('%Y-%m-%d')
-            registration_info += f"\n🟢 [translate:يفتح] / Opens: {reg_open_str}"
+            registration_info += f"\n🟢 يفتح / Opens: {reg_open_str}"
             if datetime.now() < course.registration_open_date:
-                registration_info += " ([translate:قريباً] / Coming Soon)"
+                registration_info += " (قريباً / Coming Soon)"
         
         if course.registration_close_date:
             reg_close_str = course.registration_close_date.strftime('%Y-%m-%d')
-            registration_info += f"\n🔴 [translate:يغلق] / Closes: {reg_close_str}"
+            registration_info += f"\n🔴 يغلق / Closes: {reg_close_str}"
             if datetime.now() > course.registration_close_date:
-                registration_info += " ([translate:مغلق] / Closed)"
+                registration_info += " (مغلق / Closed)"
     
     # Course period information
     course_period_info = ""
     if course.start_date or course.end_date:
-        course_period_info = "\n\n📚 [translate:مدة الدورة] / Course Duration:"
+        course_period_info = "\n\n📚 مدة الدورة / Course Duration:"
         if course.start_date:
             start_str = course.start_date.strftime('%Y-%m-%d')
-            course_period_info += f"\n▶️ [translate:البداية] / Start: {start_str}"
+            course_period_info += f"\n▶️ البداية / Start: {start_str}"
         if course.end_date:
             end_str = course.end_date.strftime('%Y-%m-%d')
-            course_period_info += f"\n🏁 [translate:النهاية] / End: {end_str}"
+            course_period_info += f"\n🏁 النهاية / End: {end_str}"
     
     # Group link
     if course.telegram_group_link:
-        group_link_text = f"🔗 [translate:رابط المجموعة]: {course.telegram_group_link}"
+        group_link_text = f"🔗 رابط المجموعة: {course.telegram_group_link}"
     else:
-        group_link_text = f"🔗 [translate:رابط المجموعة]: [translate:سيتم إرساله بعد تأكيد الدفع]"
+        group_link_text = f"🔗 رابط المجموعة: سيتم إرساله بعد تأكيد الدفع"
     
-    return f"""📖 [translate:تفاصيل الدورة]
+    return f"""📖 تفاصيل الدورة
 
-🎓 [translate:الاسم]: {course.course_name}
+🎓 الاسم: {course.course_name}
 
-📝 [translate:الوصف]: {course.description or '[translate:لا يوجد وصف]'}
+📝 الوصف: {course.description or 'لا يوجد وصف'}
 
-💰 [translate:السعر]: {course.price:.0f} [translate:جنيه سوداني]{capacity_info}{registration_info}{course_period_info}
+💰 السعر: {course.price:.0f} جنيه سوداني{capacity_info}{registration_info}{course_period_info}
 
 {group_link_text}
 """
 
 
 
+
 def receipt_processing_message() -> str:
     return "⏳ جاري معالجة الإيصال...\n\nيرجى الانتظار بينما نتحقق من الدفع..."
+
 
 def payment_success_message(course_data_list: List[dict], group_links_list: List[str] = None) -> str:
     """Payment verified successfully with course details and group links"""
@@ -169,12 +176,17 @@ def payment_success_message(course_data_list: List[dict], group_links_list: List
     
     return message
 
+
 def payment_failed_message(reason: str) -> str:
-    """Format payment failure message - simplified"""
+    """Format payment failure message - supports multiple account numbers"""
+    # ✅ NEW: Get all valid account numbers
+    valid_accounts = config.EXPECTED_ACCOUNTS if hasattr(config, 'EXPECTED_ACCOUNTS') else [config.EXPECTED_ACCOUNT_NUMBER]
+    accounts_display = " أو ".join(valid_accounts)  # Join with Arabic "or"
+    
     # Determine issue type
-    if "does not match" in reason or "account" in reason.lower():
+    if "does not match" in reason or "account" in reason.lower() or "mismatch" in reason.lower():
         issue = "❌ رقم الحساب غير صحيح"
-        details = f"الرقم المرسل إليه لا يطابق: {config.EXPECTED_ACCOUNT_NUMBER}"
+        details = f"الرقم المرسل إليه لا يطابق أحد الحسابات الصحيحة"
     elif "amount" in reason.lower() and ("below" in reason.lower() or "less" in reason.lower()):
         issue = "❌ المبلغ أقل من المطلوب"
         details = "المبلغ المحول أقل من المبلغ المطلوب"
@@ -193,11 +205,12 @@ def payment_failed_message(reason: str) -> str:
 
 💡 ما يجب فعله:
 ✓ تأكد من وضوح الصورة
-✓ تحقق من رقم الحساب: {config.EXPECTED_ACCOUNT_NUMBER}
+✓ تحقق من رقم الحساب: {accounts_display}
 ✓ تأكد من المبلغ المحول بالجنيه السوداني (SDG)
 
 سيتم مراجعة الإيصال يدوياً من قبل الإدارة.
 """
+
 
 def my_courses_message(enrollments: list, pending_count: int = 0, selected_count: int = 0, total_selected: float = 0.0) -> str:
     """Display user's enrolled courses with selection status"""
@@ -236,6 +249,7 @@ def my_courses_message(enrollments: list, pending_count: int = 0, selected_count
     
     return message
 
+
 def admin_stats_message(stats: dict) -> str:
     """Format admin statistics message"""
     return f"""
@@ -249,6 +263,7 @@ def admin_stats_message(stats: dict) -> str:
 
 🔍 إيصالات تنتظر المراجعة: {stats.get('pending_transactions', 0)}
 """
+
 
 def admin_transaction_message(transaction) -> str:
     enrollment = transaction.enrollment
@@ -270,6 +285,7 @@ def admin_transaction_message(transaction) -> str:
 حالة المعاملة: {transaction.status.value}
 """
 
+
 def error_message(error_type: str) -> str:
     errors = {
         "admin_only": "⛔ هذا الأمر متاح للمسؤولين فقط.",
@@ -283,6 +299,7 @@ def error_message(error_type: str) -> str:
     }
     
     return errors.get(error_type, errors["general"])
+
 
 
 def admin_help_message():
@@ -311,6 +328,7 @@ def admin_help_message():
 
 Need help? Contact the developer.
 """
+
 
 
 def daily_summary_report_message(enrollments, date_str):
@@ -344,54 +362,67 @@ def daily_summary_report_message(enrollments, date_str):
     return message
 
 
+
 def payment_instructions_message(amount: float) -> str:
-    """Payment instructions message"""
+    """Payment instructions message - supports multiple account numbers"""
+    # ✅ NEW: Get all valid account numbers
+    valid_accounts = config.EXPECTED_ACCOUNTS if hasattr(config, 'EXPECTED_ACCOUNTS') else [config.EXPECTED_ACCOUNT_NUMBER]
+    
+    # ✅ NEW: Format account numbers for display
+    if len(valid_accounts) == 1:
+        accounts_text = f"رقم الحساب: {valid_accounts[0]}"
+    else:
+        accounts_text = "أرقام الحسابات المقبولة:\n" + "\n".join([f"• {acc}" for acc in valid_accounts])
+    
     return f"""
 💳 تعليمات الدفع
 
 المبلغ المطلوب: {amount:.0f} جنيه سوداني (SDG)
 
 🏦 تفاصيل الحساب:
-رقم الحساب: 3646565
+{accounts_text}
 الاسم : ريم محمد صالح الخليل
+
 📸 بعد إتمام الدفع:
 أرسل صورة واضحة من إيصال التحويل
 
 ⚠️ ملاحظات هامة:
 ✓ تأكد من وضوح جميع التفاصيل في الصورة
 ✓ يجب أن يظهر المبلغ: {amount:.0f} SDG
-✓ يجب أن يتطابق رقم الحساب: {config.EXPECTED_ACCOUNT_NUMBER}
+✓ يجب أن يتطابق رقم الحساب مع أحد الأرقام المذكورة أعلاه
 
 سيتم تأكيد تسجيلك فوراً بعد التحقق!
 """
 
 
+
 def cart_message(courses: list, total: float, pending_enrollments: list = None) -> str:
     """Cart message with remaining balance support"""
     if not courses and not pending_enrollments:
-        return "🛒 [translate:سلة التسوق فارغة]"
+        return "🛒 سلة التسوق فارغة"
     
-    message = "🛒 [translate:سلة التسوق]:\n\n"
+    message = "🛒 سلة التسوق:\n\n"
     
     # New courses in cart
     if courses:
-        message += "📚 [translate:دورات جديدة]:\n"
+        message += "📚 دورات جديدة:\n"
         for idx, course in enumerate(courses, 1):
-            message += f"{idx}. {course.course_name} - {course.price:.0f} [translate:جنيه]\n"
+            message += f"{idx}. {course.course_name} - {course.price:.0f} جنيه\n"
     
     # Pending courses with partial payments
     if pending_enrollments:
         if courses:
             message += "\n"
-        message += "⚠️ [translate:دورات تحتاج إكمال الدفع]:\n"
+        message += "⚠️ دورات تحتاج إكمال الدفع:\n"
         for enrollment in pending_enrollments:
             paid = enrollment.amount_paid or 0
             remaining = enrollment.payment_amount - paid
             if remaining > 0:
-                message += f"• {enrollment.course.course_name}: {remaining:.0f} [translate:جنيه] ([translate:متبقي])\n"
+                message += f"• {enrollment.course.course_name}: {remaining:.0f} جنيه (متبقي)\n"
     
-    message += f"\n💰 [translate:المجموع]: {total:.0f} [translate:جنيه سوداني]"
+    message += f"\n💰 المجموع: {total:.0f} جنيه سوداني"
     return message
+
 
 
 
@@ -405,6 +436,7 @@ def receipt_processing_message() -> str:
 
 الرجاء الانتظار...
 """
+
 
 
 def payment_success_message(course_data_list: List[dict], group_links_list: List[str] = None) -> str:
@@ -428,6 +460,7 @@ def payment_success_message(course_data_list: List[dict], group_links_list: List
     message += "🎉 مبروك! يمكنك الآن الوصول إلى الدورات من قسم \"دوراتي\""
     
     return message
+
 
 
 def payment_failed_message(reason: str = None) -> str:
