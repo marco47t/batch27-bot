@@ -176,27 +176,6 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
         resubmission_enrollment_id = context.user_data.get("resubmission_enrollment_id")
         
         enrollment_ids_to_check = current_payment_enrollment_ids if not resubmission_enrollment_id else [resubmission_enrollment_id]
-        
-        # Collect previous receipts
-        for eid in enrollment_ids_to_check:
-            enrollment = crud.get_enrollment_by_id(dup_session, eid)
-            if enrollment:
-                receipt_data = enrollment.receipt_image_path
-                if receipt_data:
-                    if isinstance(receipt_data, str):
-                        try:
-                            # Try to parse as JSON array
-                            receipt_list = json.loads(receipt_data)
-                            if isinstance(receipt_list, list):
-                                # New format: array of receipt objects
-                                all_previous_receipt_paths.extend([r['path'] for r in receipt_list if isinstance(r, dict) and 'path' in r])
-                            else:
-                                # Old format: single string
-                                all_previous_receipt_paths.append(receipt_data)
-                        except (json.JSONDecodeError, TypeError):
-                            # Not JSON, plain string path
-                            all_previous_receipt_paths.append(receipt_data)
-
 
     logger.info(f"Checking duplicate against {len(all_previous_receipt_paths)} previous receipts for user {telegram_user_id}")
 
