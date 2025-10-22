@@ -10,10 +10,10 @@ logger = logging.getLogger(__name__)
 
 
 def calculate_consolidated_fraud_score(
-    gemini_result: Dict[str, Any],
-    image_forensics_result: Dict[str, Any],
-    duplicate_check_result: Dict[str, Any]
-) -> Dict[str, Any]:
+    gemini_result: dict,
+    image_forensics_result: dict,
+    duplicate_check_result: dict
+) -> dict:
     """
     Calculate consolidated fraud score with receipt age detection
     
@@ -23,6 +23,11 @@ def calculate_consolidated_fraud_score(
     - Gemini AI Analysis: 40 points
     - Image Forensics: 30 points
     - Old Receipt Penalty: up to 20 points
+    
+    Args:
+        gemini_result: Results from Gemini AI validation
+        image_forensics_result: Results from ELA and forensic analysis
+        duplicate_check_result: Results from duplicate detection
     
     Returns:
         dict with fraud_score (0-100), risk_level, and recommendation

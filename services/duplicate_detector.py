@@ -124,14 +124,16 @@ def calculate_similarity(hash1: Dict[str, str], hash2: Dict[str, str]) -> Tuple[
         return avg_similarity, "DIFFERENT"
 
 
-def check_duplicate_submission(user_id: int, image_path: str, similarity_threshold: float = 75.0) -> Dict[str, Any]:
+def check_duplicate_submission(user_id: int, image_path: str, similarity_threshold: float = 75.0, previous_receipt_paths: list = None) -> Dict[str, Any]:
     """
     Enhanced duplicate detection using multiple perceptual hashing algorithms
+    Now supports checking against specific previous receipt paths (for partial payments)
     
     Args:
         user_id: Current user ID
         image_path: Path or URL to receipt image
         similarity_threshold: Minimum similarity % to flag as duplicate (default: 75%)
+        previous_receipt_paths: Optional list of specific receipt paths to check against (for same user's partial payments)
     
     Returns dict with duplicate detection results
     """
@@ -152,7 +154,42 @@ def check_duplicate_submission(user_id: int, image_path: str, similarity_thresho
         with get_db() as session:
             from database.models import Transaction, Enrollment, User
             
-            # Query ALL transactions from ALL users
+            # ✅ FIRST: Check against provided previous receipts (for same user's partial payments)
+            if previous_receipt_paths:
+                logger.info(f"Checking against {len(previous_receipt_paths)} previous receipts from same user")
+                
+                for prev_path in previous_receipt_paths:
+                    if not prev_path:
+                        continue
+                    
+                    # Check exact duplicate (file hash)
+                    prev_file_hash = compute_file_hash(prev_path)
+                    if prev_file_hash and prev_file_hash == file_hash:
+                        return {
+                            'is_duplicate': True,
+                            'risk_level': 'HIGH',
+                            'match_type': 'EXACT',
+                            'similarity_percentage': 100.0,
+                            'original_receipt_path': prev_path,
+                            'message': '⚠️ You already submitted this exact receipt before. Please submit a NEW receipt for the remaining amount.'
+                        }
+                    
+                    # Check perceptual similarity
+                    prev_multi_hash = compute_multi_hash(prev_path)
+                    if prev_multi_hash:
+                        similarity, match_type = calculate_similarity(multi_hash, prev_multi_hash)
+                        
+                        if similarity >= similarity_threshold:
+                            return {
+                                'is_duplicate': True,
+                                'risk_level': 'HIGH' if similarity >= 90 else 'MEDIUM',
+                                'match_type': match_type,
+                                'similarity_percentage': similarity,
+                                'original_receipt_path': prev_path,
+                                'message': f'⚠️ This receipt is {similarity:.1f}% similar to one you already submitted. Please submit a NEW receipt.'
+                            }
+            
+            # THEN: Check ALL transactions from ALL users (cross-user duplicate check)
             all_transactions = session.query(Transaction).join(
                 Enrollment, Transaction.enrollment_id == Enrollment.enrollment_id
             ).join(
