@@ -69,7 +69,8 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
     
     if not context.user_data.get("awaiting_receipt_upload"):
         return
-    
+    file_path = None
+    temp_path = None
     user = update.effective_user
     file = None
     telegram_user_id = user.id
