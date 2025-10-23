@@ -84,7 +84,8 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
     user = update.effective_user
     file = None
     telegram_user_id = user.id
-    
+    fraud_score = 0 
+    fraud_indicators = []  
     logger.info(f"Receipt upload started for user {telegram_user_id}")
     
     # GET INTERNAL USER ID FIRST
@@ -173,7 +174,6 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
     logger.info(f"📋 Extracted Transaction ID from receipt: {transaction_id}")
 
     # ✅ NEW: Check transaction ID duplicate (returns 50 if duplicate, 0 otherwise)
-    from services.duplicate_detector import check_transaction_id_duplicate
     transaction_duplicate_check = check_transaction_id_duplicate(transaction_id, internal_user_id)
 
     # ✅ NEW: Image duplicate check (always returns 0 - disabled)
@@ -1039,7 +1039,7 @@ ID: <code>{telegram_user_id}</code>
 
         💰 Paid: {extracted_amount:.0f} SDG
         📊 Required: {expected_amount_for_gemini:.0f} SDG
-        ⚠️ Remaining: {remaining:.0f} SDG
+        ⚠️ Remaining: {remaining_total:.0f} SDG
 
         📚 Courses: {course_names_str}
         📝 Enrollment IDs: {enrollment_ids_str}
