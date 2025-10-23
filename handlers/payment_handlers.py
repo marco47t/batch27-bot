@@ -11,6 +11,7 @@ from database import crud, get_db
 from database.models import PaymentStatus, TransactionStatus
 from services.gemini_service import validate_receipt_with_gemini_ai
 from services.fraud_detector import calculate_consolidated_fraud_score
+from services.duplicate_detector import check_transaction_id_duplicate
 import logging
 import tempfile
 import os
