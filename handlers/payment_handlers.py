@@ -71,6 +71,15 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
         return
     file_path = None
     temp_path = None
+    enrollments_to_update = []
+    enrollment_ids_to_update = []
+    expected_amount_for_gemini = 0
+    resubmission_enrollment_id = None
+    internal_user_id = None
+    transaction_id = None
+    transfer_datetime = None
+    sender_name = None
+    extracted_amount = None
     user = update.effective_user
     file = None
     telegram_user_id = user.id
