@@ -154,7 +154,13 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
         config.EXPECTED_ACCOUNTS
     )
     transaction_id = gemini_result.get('transaction_id')
-    transaction_id_duplicate = check_transaction_id_duplicate(transaction_id, internal_user_id)
+    logger.info(f"🔍 DUPLICATE CHECK - Transaction ID extracted: '{transaction_id}' (type: {type(transaction_id)})")
+    # Check for duplicate transaction ID
+    transaction_duplicate_check = check_transaction_id_duplicate(transaction_id, internal_user_id)
+
+    # ✅ ADD THIS LOG
+    logger.info(f"🔍 DUPLICATE CHECK - Result: {transaction_duplicate_check}")
+    logger.info(f"🔍 DUPLICATE CHECK - is_duplicate={transaction_duplicate_check.get('is_duplicate')}, fraud_score={transaction_duplicate_check.get('fraud_score', 0)}")
 
     transfer_datetime = parse_transfer_datetime(gemini_result)  # Parse date + time
     sender_name = gemini_result.get('sender_name')
@@ -182,6 +188,12 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
 
     # Calculate final fraud score
     fraud_score = transaction_duplicate_check.get('fraud_score', 0)  # 50 if duplicate ID, 0 otherwise
+    logger.info(f"💯 FRAUD SCORE CALCULATION - Initial score from duplicate check: {fraud_score}")
+    fraud_analysis = calculate_consolidated_fraud_score(
+        duplicate_check=duplicate_check_result,
+        gemini_result=gemini_result,
+        image_path=file_path
+    )
     image_similarity_score = image_duplicate_check.get('image_similarity_score', 0)  # Always 0
 
     logger.info(f"📊 Fraud Scores - Transaction ID: {fraud_score}, Image: {image_similarity_score}")
@@ -192,6 +204,9 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
         fraud_indicators.append(
             f"Duplicate transaction ID: {transaction_id} (previously used by user {transaction_duplicate_check.get('original_telegram_id')})"
         )
+    # ✅ ADD THIS LOG BEFORE THE DECISION
+    logger.info(f"⚖️ DECISION POINT - Final fraud_score: {fraud_score}")
+    logger.info(f"⚖️ DECISION POINT - Thresholds: REJECT>=70, MANUAL_REVIEW>=40")
 
     # Determine recommendation based on fraud score
     if fraud_score >= 70:
