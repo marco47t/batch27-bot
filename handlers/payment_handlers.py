@@ -152,6 +152,12 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
         config.EXPECTED_ACCOUNTS
     )
     transaction_id = gemini_result.get('transaction_id')
+    transaction_id_duplicate = check_transaction_id_duplicate(transaction_id, internal_user_id)
+
+    # Add to fraud score
+    if transaction_id_duplicate.get('is_duplicate'):
+        fraud_score += transaction_id_duplicate.get('fraud_score', 50)
+        fraud_indicators.append(f"Duplicate Transaction ID: {transaction_id}")
     transfer_datetime = parse_transfer_datetime(gemini_result)  # Parse date + time
     sender_name = gemini_result.get('sender_name')
     extracted_amount = gemini_result.get('amount')
