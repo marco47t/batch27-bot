@@ -93,7 +93,7 @@ class Enrollment(Base):
     verification_date = Column(DateTime, nullable=True)
     admin_notes = Column(Text, nullable=True)
     receipt_transaction_id = Column(String(100), nullable=True)
-    receipt_transfer_date = Column(DateTime, nullable=True)
+    receipt_transfer_datetime = Column(DateTime, nullable=True)
     receipt_sender_name = Column(String(255), nullable=True)
     receipt_submission_date = Column(DateTime, default=datetime.utcnow)
     
@@ -121,7 +121,8 @@ class Transaction(Base):
     
     # ✅ NEW: Store extracted receipt details
     receipt_transaction_id = Column(String(100), nullable=True, index=True)  # ✅ INDEXED for duplicate check
-    receipt_transfer_date = Column(DateTime, nullable=True)
+    receipt_transfer_datetime = Column(DateTime, nullable=True)
+
     receipt_sender_name = Column(String(255), nullable=True)
     receipt_amount = Column(Float, nullable=True)  # ✅ NEW: Store extracted amount
     
