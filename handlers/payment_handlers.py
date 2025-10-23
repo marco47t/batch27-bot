@@ -14,6 +14,23 @@ from services.fraud_detector import calculate_consolidated_fraud_score
 import logging
 import tempfile
 import os
+from datetime import datetime 
+from typing import Optional
+def parse_transfer_datetime(gemini_result: dict) -> Optional[datetime]:
+    """Parse date and time from Gemini result into datetime object"""
+    date_str = gemini_result.get('date')  # "2025-10-22"
+    time_str = gemini_result.get('time')  # "20:39"
+    
+    if not date_str or not time_str:
+        return None
+    
+    try:
+        # Combine date and time
+        datetime_str = f"{date_str} {time_str}"
+        return datetime.strptime(datetime_str, "%Y-%m-%d %H:%M")
+    except Exception as e:
+        logger.error(f"Failed to parse transfer datetime from '{date_str}' and '{time_str}': {e}")
+        return None
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +141,10 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
         expected_amount_for_gemini,
         config.EXPECTED_ACCOUNTS
     )
+    transaction_id = gemini_result.get('transaction_id')
+    transfer_datetime = parse_transfer_datetime(gemini_result)  # Parse date + time
+    sender_name = gemini_result.get('sender_name')
+    extracted_amount = gemini_result.get('amount')
 
     logger.info(f"Gemini validation result: is_valid={gemini_result.get('is_valid')}, amount={gemini_result.get('amount')}, tx_id={gemini_result.get('transaction_id')}")
 
@@ -381,7 +402,8 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
                                 fraud_score=fraud_analysis['fraud_score'],
                                 fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
                                 receipt_transaction_id=transaction_id,
-                                receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                                receipt_transfer_datetime=transfer_datetime,
+
                                 receipt_sender_name=gemini_result.get('sender_name'),
                                 receipt_amount=gemini_result.get('amount')
                             )
@@ -399,7 +421,7 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
                             fraud_score=fraud_analysis['fraud_score'],
                             fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
                             receipt_transaction_id=transaction_id,
-                            receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                            receipt_transfer_datetime=transfer_datetime,
                             receipt_sender_name=gemini_result.get('sender_name'),
                             receipt_amount=gemini_result.get('amount')
                         )
@@ -600,7 +622,7 @@ ID: <code>{telegram_user_id}</code>
                                 fraud_score=fraud_analysis['fraud_score'],
                                 fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
                                 receipt_transaction_id=transaction_id,
-                                receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                                receipt_transfer_datetime=transfer_datetime,
                                 receipt_sender_name=gemini_result.get('sender_name'),
                                 receipt_amount=gemini_result.get('amount')
                             )
@@ -618,7 +640,7 @@ ID: <code>{telegram_user_id}</code>
                                 fraud_score=fraud_analysis['fraud_score'],
                                 fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
                                 receipt_transaction_id=transaction_id,
-                                receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                                receipt_transfer_datetime=transfer_datetime,
                                 receipt_sender_name=gemini_result.get('sender_name'),
                                 receipt_amount=gemini_result.get('amount')
                             )
@@ -636,7 +658,7 @@ ID: <code>{telegram_user_id}</code>
                             fraud_score=fraud_analysis['fraud_score'],
                             fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
                             receipt_transaction_id=transaction_id,
-                            receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                            receipt_transfer_datetime=transfer_datetime,
                             receipt_sender_name=gemini_result.get('sender_name'),
                             receipt_amount=gemini_result.get('amount')
                         )
@@ -872,7 +894,7 @@ ID: <code>{telegram_user_id}</code>
                             fraud_score=fraud_analysis['fraud_score'],
                             fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
                             receipt_transaction_id=transaction_id,
-                            receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                            receipt_transfer_datetime=transfer_datetime,
                             receipt_sender_name=gemini_result.get('sender_name'),
                             receipt_amount=extracted_amount
                         )
@@ -890,7 +912,7 @@ ID: <code>{telegram_user_id}</code>
                             fraud_score=fraud_analysis['fraud_score'],
                             fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
                             receipt_transaction_id=transaction_id,
-                            receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                            receipt_transfer_datetime=transfer_datetime,
                             receipt_sender_name=gemini_result.get('sender_name'),
                             receipt_amount=extracted_amount
                         )
@@ -908,7 +930,7 @@ ID: <code>{telegram_user_id}</code>
                         fraud_score=fraud_analysis['fraud_score'],
                         fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
                         receipt_transaction_id=transaction_id,
-                        receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                        receipt_transfer_datetime=transfer_datetime,
                         receipt_sender_name=gemini_result.get('sender_name'),
                         receipt_amount=extracted_amount
                     )
@@ -1095,7 +1117,7 @@ ID: <code>{telegram_user_id}</code>
                             fraud_score=fraud_analysis['fraud_score'],
                             fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
                             receipt_transaction_id=transaction_id,
-                            receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                            receipt_transfer_datetime=transfer_datetime,
                             receipt_sender_name=gemini_result.get('sender_name'),
                             receipt_amount=result.get('amount')
                         )
@@ -1114,7 +1136,7 @@ ID: <code>{telegram_user_id}</code>
                             fraud_score=fraud_analysis['fraud_score'],
                             fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
                             receipt_transaction_id=transaction_id,
-                            receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                            receipt_transfer_datetime=transfer_datetime,
                             receipt_sender_name=gemini_result.get('sender_name'),
                             receipt_amount=result.get('amount')
                         )
@@ -1133,7 +1155,7 @@ ID: <code>{telegram_user_id}</code>
                         fraud_score=fraud_analysis['fraud_score'],
                         fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
                         receipt_transaction_id=transaction_id,
-                        receipt_transfer_datetime=gemini_result.get('transfer_datetime'),
+                        receipt_transfer_datetime=transfer_datetime,
                         receipt_sender_name=gemini_result.get('sender_name'),
                         receipt_amount=result.get('amount')
                     )
