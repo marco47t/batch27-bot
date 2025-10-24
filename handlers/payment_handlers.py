@@ -85,6 +85,7 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
     file = None
     telegram_user_id = user.id
     fraud_score = 0 
+    duplicate_check_result = {'fraud_score': 0, 'is_duplicate': False}  # ← ADD THIS LINE
     fraud_indicators = []  
     logger.info(f"Receipt upload started for user {telegram_user_id}")
     
