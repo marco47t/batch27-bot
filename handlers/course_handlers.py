@@ -83,8 +83,8 @@ async def course_selection_menu_callback(update: Update, context: ContextTypes.D
     
     logger.info(f"Showing {len(available_courses)} available courses for user {telegram_user_id} (cart has {len(cart_items)} items)")
     
-    cart_total = sum(course.price for course in available_courses if course.course_id in cart_course_ids)
-
+    cart_totals = crud.calculate_cart_total(session, internal_user_id)
+    cart_total = cart_totals['total']
     await query.edit_message_text(
         course_list_message(available_courses, course_enrollment_counts),
         reply_markup=course_selection_keyboard(available_courses, cart_course_ids, cart_total)
@@ -283,8 +283,8 @@ async def course_select_callback(update: Update, context: ContextTypes.DEFAULT_T
             course_enrollment_counts[c.course_id] = count
     
     # Calculate cart total
-    cart_total = sum(c.price for c in available_courses if c.course_id in cart_course_ids)
-
+    cart_totals = crud.calculate_cart_total(session, internal_user_id)
+    cart_total = cart_totals['total']
     await query.edit_message_text(
         course_list_message(available_courses, course_enrollment_counts),
         reply_markup=course_selection_keyboard(available_courses, cart_course_ids, cart_total)
@@ -348,11 +348,9 @@ async def course_deselect_callback(update: Update, context: ContextTypes.DEFAULT
     logger.info(f"User {telegram_user_id} removed course {course_id} from cart")
     log_user_action(telegram_user_id, "course_deselected", f"course_id={course_id}")
     
-    cart_total = sum(course.price for course in available_courses if course.course_id in cart_course_ids)
-
-# Calculate cart total
-    cart_total = sum(c.price for c in available_courses if c.course_id in cart_course_ids)
-
+    cart_totals = crud.calculate_cart_total(session, internal_user_id)
+    cart_total = cart_totals['total']
+    # Calculate cart total
     await query.edit_message_text(
         course_list_message(available_courses, course_enrollment_counts),
         reply_markup=course_selection_keyboard(available_courses, cart_course_ids, cart_total)
@@ -398,8 +396,30 @@ async def view_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
         
         # ✅ BUILD TOTAL WITH BOTH CART ITEMS AND PENDING BALANCES
-        courses = [item.course for item in cart_items]
-        total = sum(course.price for course in courses)
+        cart_totals = crud.calculate_cart_total(session, internal_user_id)
+
+        # Build cart message with certificate info
+        cart_text = "🛒 سلة التسوق / Shopping Cart\n\n"
+
+        for item in cart_items:
+            course = item.course
+            cert_icon = "📜" if item.with_certificate else ""
+            cert_text = "\n   ✅ مع شهادة (With Certificate)" if item.with_certificate else ""
+            
+            item_price = course.price
+            if item.with_certificate and course.certificate_available:
+                item_price += course.certificate_price
+            
+            cart_text += f"{cert_icon} {course.course_name}\n"
+            cart_text += f"   💰 {item_price:.0f} SDG{cert_text}\n\n"
+
+        cart_text += f"━━━━━━━━━━━━━━\n"
+        cart_text += f"📚 الدورات: {cart_totals['course_price']:.0f} SDG\n"
+        cart_text += f"📜 الشهادات: {cart_totals['certificate_price']:.0f} SDG\n"
+        cart_text += f"━━━━━━━━━━━━━━\n"
+        cart_text += f"💵 الإجمالي: {cart_totals['total']:.0f} SDG"
+
+        total = cart_totals['total']
         
         # Add remaining balances from pending enrollments
         for enrollment in pending_enrollments:
@@ -409,16 +429,14 @@ async def view_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 total += remaining
         
         # ✅ PASS PENDING ENROLLMENTS TO MESSAGE FUNCTION
-        from utils.messages import cart_message
-        message = cart_message(courses, total, pending_enrollments)
-        
-        logger.info(f"User {telegram_user_id} cart: {len(cart_items)} new items + {len(pending_enrollments)} pending, total={total:.0f}")
-        
         await query.edit_message_text(
-            message,
+            cart_text,  # We already built this above
             reply_markup=cart_keyboard(),
             parse_mode='Markdown'
         )
+        
+        logger.info(f"User {telegram_user_id} cart: {len(cart_items)} new items + {len(pending_enrollments)} pending, total={total:.0f}")
+        
 
 
 
@@ -477,13 +495,21 @@ async def confirm_cart_callback(update: Update, context: ContextTypes.DEFAULT_TY
             )
             return
         
-        courses = [item.course for item in cart_items]
-        total = sum(course.price for course in courses)
+        # ✅ Calculate total with certificates
+        cart_totals = crud.calculate_cart_total(session, internal_user_id)
+        total = cart_totals['total']
         
         # Create pending enrollments using internal ID
         enrollment_ids = []
-        for course in courses:
-            # ✅ CHECK IF PENDING ENROLLMENT ALREADY EXISTS
+        for item in cart_items:
+            course = item.course
+            
+            # Calculate payment amount including certificate
+            payment_amount = course.price
+            if item.with_certificate and course.certificate_available:
+                payment_amount += course.certificate_price
+            
+            # CHECK IF PENDING ENROLLMENT ALREADY EXISTS
             existing_enrollment = session.query(crud.Enrollment).filter(
                 crud.Enrollment.user_id == internal_user_id,
                 crud.Enrollment.course_id == course.course_id,
@@ -491,14 +517,17 @@ async def confirm_cart_callback(update: Update, context: ContextTypes.DEFAULT_TY
             ).first()
             
             if existing_enrollment:
-                # ✅ REUSE EXISTING PENDING ENROLLMENT (DON'T CREATE NEW ONE)
+                # Update existing enrollment with correct amount and certificate flag
+                existing_enrollment.payment_amount = payment_amount
+                existing_enrollment.with_certificate = item.with_certificate
                 enrollment_ids.append(existing_enrollment.enrollment_id)
-                logger.info(f"Reusing existing pending enrollment {existing_enrollment.enrollment_id} for user {telegram_user_id}, course {course.course_id}, current paid: {existing_enrollment.amount_paid or 0:.0f}")
+                logger.info(f"Reusing existing pending enrollment {existing_enrollment.enrollment_id}, amount: {payment_amount}")
             else:
-                # ✅ CREATE NEW ENROLLMENT (ONLY IF NO PENDING ONE EXISTS)
-                enrollment = crud.create_enrollment(session, internal_user_id, course.course_id, course.price)
+                # Create new enrollment with certificate info
+                enrollment = crud.create_enrollment(session, internal_user_id, course.course_id, payment_amount)
+                enrollment.with_certificate = item.with_certificate
                 enrollment_ids.append(enrollment.enrollment_id)
-                logger.info(f"Created NEW enrollment {enrollment.enrollment_id} for user {telegram_user_id}, course {course.course_id}")
+                logger.info(f"Created NEW enrollment {enrollment.enrollment_id}, amount: {payment_amount}, with_cert: {item.with_certificate}")
 
         session.commit()
 
@@ -516,6 +545,7 @@ async def confirm_cart_callback(update: Update, context: ContextTypes.DEFAULT_TY
         # Import here to avoid circular import
         from handlers.payment_handlers import proceed_to_payment_callback
         await proceed_to_payment_callback(update, context)
+
 
 
 
@@ -666,16 +696,39 @@ async def handle_legal_name_during_registration(update: Update, context: Context
                     )
                     return
                 
-                courses = [item.course for item in cart_items]
-                total = sum(course.price for course in courses)
+                cart_totals = crud.calculate_cart_total(session, internal_user_id)
+                total = cart_totals['total']
+
                 
                 # Create pending enrollments
+                cart_items = crud.get_user_cart(session, internal_user_id)
+
+                if not cart_items:
+                    await update.message.reply_text(
+                        "❌ عربة التسوق فارغة\n❌ Cart is empty",
+                        reply_markup=back_to_main_keyboard()
+                    )
+                    return
+
+                # Create pending enrollments with certificate info
                 enrollment_ids = []
-                for course in courses:
-                    enrollment = crud.create_enrollment(session, internal_user_id, course.course_id, course.price)
+                for item in cart_items:
+                    course = item.course
+                    
+                    # Calculate payment amount including certificate
+                    payment_amount = course.price
+                    if item.with_certificate and course.certificate_available:
+                        payment_amount += course.certificate_price
+                    
+                    enrollment = crud.create_enrollment(session, internal_user_id, course.course_id, payment_amount)
+                    enrollment.with_certificate = item.with_certificate
                     enrollment_ids.append(enrollment.enrollment_id)
-                    logger.info(f"Created enrollment {enrollment.enrollment_id} for user {internal_user_id}")
-                
+                    logger.info(f"Created enrollment {enrollment.enrollment_id} for user {internal_user_id}, amount: {payment_amount}")
+
+                session.commit()
+
+                # Clear cart after creating enrollments
+                crud.clear_user_cart(session, internal_user_id)
                 session.commit()
                 
                 # Store in context for payment
