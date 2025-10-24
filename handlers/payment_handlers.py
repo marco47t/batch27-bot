@@ -719,7 +719,7 @@ ID: <code>{telegram_user_id}</code>
         ID: <code>{telegram_user_id}</code>
 
         🟡 <b>Fraud Score: {fraud_analysis['fraud_score']}/100</b>
-        ⚠️ <b>Risk Level: {fraud_analysis['risk_level']}</b>
+        ⚠️ <b>Risk Level: {fraud_analysis.get('risk_level', 'UNKNOWN')}</b>
 
         <b>⚠️ Warning Indicators:</b>
         """
