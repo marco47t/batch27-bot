@@ -512,7 +512,7 @@ def main():
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.User(config.ADMIN_USER_IDS), 
         admin_handlers.rejection_reason_message_handler
-    ))
+    ), group=-1)
 
 
     application.add_handler(CommandHandler("setcert", admin_handlers.set_certificate_price_command))
