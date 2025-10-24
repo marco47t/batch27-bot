@@ -238,21 +238,34 @@ async def rejection_reason_message_handler(update: Update, context: ContextTypes
     """Handle admin sending rejection reason after clicking reject"""
     user_id = update.effective_user.id
     
+    # Add debug logging
+    logger.info(f"rejection_reason_message_handler called by user {user_id}")
+    logger.info(f"awaiting_rejection_reason: {context.user_data.get('awaiting_rejection_reason')}")
+    logger.info(f"awaiting_failed_rejection_reason: {context.user_data.get('awaiting_failed_rejection_reason')}")
+    logger.info(f"pending_rejection_transaction_id: {context.user_data.get('pending_rejection_transaction_id')}")
+    
     if not is_admin_user(user_id):
+        logger.warning(f"User {user_id} is not admin")
         return
     
     if context.user_data.get("awaiting_failed_rejection_reason"):
+        logger.info("Delegating to failed_rejection_reason_handler")
         await failed_rejection_reason_handler(update, context)
         return
+    
     # Check if we're expecting a rejection reason
     if not context.user_data.get("awaiting_rejection_reason"):
+        logger.warning(f"Not awaiting rejection reason for user {user_id}")
         return
     
     transaction_id = context.user_data.get("pending_rejection_transaction_id")
     if not transaction_id:
+        logger.error("No pending_rejection_transaction_id found")
         return
     
     reason = update.message.text
+    logger.info(f"Processing rejection for transaction {transaction_id} with reason: {reason}")
+    
     
     # Variables to store before session closes
     user_chat_id = None
