@@ -59,7 +59,7 @@ class Course(Base):
     course_name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     price = Column(Float, nullable=False)
-    certificate_price = Column(Float, nullable=False)
+    certificate_price = Column(Float, nullable=False, default=0)
     certificate_available = Column(Boolean, default=False, nullable=False)
     telegram_group_link = Column(String(500), nullable=True)
     telegram_group_id = Column(String(100), nullable=True)

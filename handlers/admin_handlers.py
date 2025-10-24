@@ -162,7 +162,7 @@ async def admin_approve_callback(update: Update, context: ContextTypes.DEFAULT_T
     user_chat_id, course_names, group_links = None, [], []
 
     with get_db() as session:
-        transaction = crud.update_transaction(session, transaction_id, status="approved", admin_id=admin_user.id)
+        transaction = crud.update_transaction(session, transaction_id, status="approved", admin_reviewed=admin_user.id)
         if not transaction:
             await query.edit_message_text("❌ Transaction not found.")
             return
@@ -265,7 +265,7 @@ async def rejection_reason_message_handler(update: Update, context: ContextTypes
             transaction_id, 
             status="rejected", 
             failure_reason=reason, 
-            admin_id=user_id
+            admin_reviewed=user_id
         )
         
         if not transaction:
@@ -395,7 +395,7 @@ async def admin_approve_failed_callback(update: Update, context: ContextTypes.DE
                     session,
                     transaction.transaction_id,
                     status=TransactionStatus.APPROVED,
-                    admin_id=admin_user.id
+                    admin_reviewed=admin_user.id
                 )
             
             # Collect course info
@@ -523,7 +523,7 @@ async def failed_rejection_reason_handler(update: Update, context: ContextTypes.
                     transaction.transaction_id,
                     status=TransactionStatus.REJECTED,
                     failure_reason=reason,
-                    admin_id=user_id
+                    admin_reviewed=user_id
                 )
             
             # Get user info
