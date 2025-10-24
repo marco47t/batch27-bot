@@ -758,6 +758,8 @@ async def certificate_choice_callback(update: Update, context: ContextTypes.DEFA
     
     with get_db() as session:
         user = crud.get_or_create_user(session, telegram_user_id)
+        internal_user_id = user.user_id
+        
         course = session.query(Course).filter(Course.course_id == course_id).first()
         
         if not course:
@@ -765,7 +767,8 @@ async def certificate_choice_callback(update: Update, context: ContextTypes.DEFA
             return
         
         # Add to cart with certificate preference
-        crud.add_to_cart_with_certificate(session, user.user_id, course_id, with_certificate)
+        crud.add_to_cart_with_certificate(session, internal_user_id, course_id, with_certificate)
+        session.commit()
         
         # Calculate price
         total_price = course.price
@@ -774,16 +777,28 @@ async def certificate_choice_callback(update: Update, context: ContextTypes.DEFA
         
         cert_status = "✅ مع شهادة" if with_certificate else "❌ بدون شهادة"
         
+        # Get updated cart and courses for keyboard
+        available_courses = crud.get_available_courses(session)
+        cart_items = crud.get_cart_items(session, internal_user_id)
+        selected_course_ids = [item.course_id for item in cart_items]
+        
+        # Calculate cart total with certificates
+        cart_total_data = crud.calculate_cart_total(session, internal_user_id)
+        cart_total = cart_total_data['total']
+        
         message = f"""
 ✅ تمت الإضافة إلى السلة!
 Added to cart!
 
 📚 {course.course_name}
-💰 السعر الإجمالي: {total_price} SDG
+💰 السعر الإجمالي: {total_price:.0f} SDG
 {cert_status}
+
+🛒 إجمالي السلة: {cart_total:.0f} SDG
 """
         
         await query.edit_message_text(
             message,
-            reply_markup=course_selection_keyboard()
+            reply_markup=course_selection_keyboard(available_courses, selected_course_ids, cart_total)
         )
+
