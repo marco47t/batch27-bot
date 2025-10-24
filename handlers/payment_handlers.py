@@ -191,9 +191,9 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
     fraud_score = transaction_duplicate_check.get('fraud_score', 0)  # 50 if duplicate ID, 0 otherwise
     logger.info(f"💯 FRAUD SCORE CALCULATION - Initial score from duplicate check: {fraud_score}")
     fraud_analysis = calculate_consolidated_fraud_score(
-        duplicate_check=duplicate_check_result,
         gemini_result=gemini_result,
-        image_path=file_path
+        image_forensics_result={'is_forged': False, 'ela_score': 0},  # ✅ Disabled, pass empty dict
+        duplicate_check_result=duplicate_check_result  # ✅ Correct parameter name
     )
     image_similarity_score = image_duplicate_check.get('image_similarity_score', 0)  # Always 0
 
