@@ -778,7 +778,7 @@ async def certificate_choice_callback(update: Update, context: ContextTypes.DEFA
         cert_status = "✅ مع شهادة" if with_certificate else "❌ بدون شهادة"
         
         # Get updated cart and courses for keyboard
-        available_courses = crud.get_available_courses(session)
+        available_courses = crud.get_available_courses_for_registration(session)
         cart_items = crud.get_cart_items(session, internal_user_id)
         selected_course_ids = [item.course_id for item in cart_items]
         
