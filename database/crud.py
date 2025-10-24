@@ -60,12 +60,16 @@ def create_course(session: Session, course_name: str, description: str,
                   price: float, telegram_group_link: str = None,
                   telegram_group_id: int = None, max_students: int = None,
                   start_date: datetime = None, end_date: datetime = None,
-                  registration_open_date: datetime = None, 
-                  registration_close_date: datetime = None) -> Course:
+                  registration_open_date: datetime = None,
+                  registration_close_date: datetime = None,
+                  certificate_price: float = 0,  # ✅ ADD THIS
+                  certificate_available: bool = False) -> Course:  # ✅ ADD THIS
     course = Course(
         course_name=course_name,
         description=description,
         price=price,
+        certificate_price=certificate_price,  # ✅ ADD THIS
+        certificate_available=certificate_available,  # ✅ ADD THIS
         telegram_group_link=telegram_group_link,
         telegram_group_id=telegram_group_id,
         max_students=max_students,
