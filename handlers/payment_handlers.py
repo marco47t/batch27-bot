@@ -312,14 +312,6 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
         logger.info(f"⚠️ Duplicate detected - adding 55 points to fraud score")
     else:
         duplicate_check_result["fraud_contribution"] = 0
-
-    # ===== CALCULATE CONSOLIDATED FRAUD SCORE =====
-    fraud_analysis = calculate_consolidated_fraud_score(
-        gemini_result,
-        image_forensics_result,
-        duplicate_check_result
-    )
-
     logger.info(f"🎯 Fraud Analysis - Score: {fraud_analysis['fraud_score']}/100, Risk: {fraud_analysis['risk_level']}, Action: {fraud_analysis['recommendation']}")
     logger.info(f"📋 Fraud indicators: {fraud_analysis['fraud_indicators']}")
 
