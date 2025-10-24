@@ -883,3 +883,58 @@ def get_transaction_with_user_info(session, transaction_id: int):
     ).first()
     
     return transaction
+
+
+# Add to cart operations section
+def add_to_cart_with_certificate(session: Session, user_id: int, course_id: int, with_certificate: bool = False):
+    """Add course to cart with certificate option"""
+    # Check if already in cart
+    existing = session.query(Cart).filter(
+        Cart.user_id == user_id,
+        Cart.course_id == course_id
+    ).first()
+    
+    if existing:
+        # Update certificate preference
+        existing.with_certificate = with_certificate
+    else:
+        # Create new cart item
+        cart_item = Cart(
+            user_id=user_id,
+            course_id=course_id,
+            with_certificate=with_certificate
+        )
+        session.add(cart_item)
+    
+    session.commit()
+    return True
+
+def calculate_cart_total(session: Session, user_id: int) -> dict:
+    """Calculate total cart cost including certificates"""
+    cart_items = session.query(Cart).filter(Cart.user_id == user_id).all()
+    
+    total_course_price = 0
+    total_certificate_price = 0
+    course_details = []
+    
+    for item in cart_items:
+        course = session.query(Course).filter(Course.course_id == item.course_id).first()
+        if course:
+            total_course_price += course.price
+            if item.with_certificate and course.certificate_available:
+                total_certificate_price += course.certificate_price
+            
+            course_details.append({
+                'course_id': course.course_id,
+                'course_name': course.course_name,
+                'price': course.price,
+                'with_certificate': item.with_certificate,
+                'certificate_price': course.certificate_price if item.with_certificate else 0
+            })
+    
+    return {
+        'course_price': total_course_price,
+        'certificate_price': total_certificate_price,
+        'total': total_course_price + total_certificate_price,
+        'courses': course_details
+    }

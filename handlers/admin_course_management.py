@@ -11,10 +11,10 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Conversation states
-(COURSE_NAME, COURSE_DESCRIPTION, COURSE_PRICE,
-COURSE_GROUP_LINK, COURSE_MAX_STUDENTS, COURSE_START_DATE, COURSE_END_DATE, 
+(COURSE_NAME, COURSE_DESCRIPTION, COURSE_PRICE, COURSE_CERTIFICATE_PRICE,  # ← ADD THIS
+COURSE_GROUP_LINK, COURSE_MAX_STUDENTS, COURSE_START_DATE, COURSE_END_DATE,
 COURSE_REG_OPEN_DATE, COURSE_REG_CLOSE_DATE, COURSE_CONFIRM,
-EDIT_SELECT_COURSE, EDIT_SELECT_FIELD, EDIT_INPUT_VALUE) = range(13)
+EDIT_SELECT_COURSE, EDIT_SELECT_FIELD, EDIT_INPUT_VALUE) = range(14)
 
 # ==================== /addcourse COMMAND ====================
 
@@ -82,25 +82,28 @@ async def course_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """Receive course price"""
     try:
         price = float(update.message.text.strip())
-        
         if price <= 0:
-            await update.message.reply_text("❌ السعر يجب أن يكون أكبر من صفر.\nPrice must be greater than zero.")
+            await update.message.reply_text("[translate:❌ السعر يجب أن يكون أكبر من صفر.]\nPrice must be greater than zero.")
             return COURSE_PRICE
         
         context.user_data['new_course']['price'] = price
-        context.user_data['new_course']['group_link'] = None  # Skip group link
         
-        # GO DIRECTLY TO MAX STUDENTS (skip group link step)
+        # ✅ NOW ASK FOR CERTIFICATE PRICE INSTEAD OF GOING TO MAX STUDENTS
         await update.message.reply_text(
-            f"✅ السعر: {price:.2f} SDG\n\n"
-            f"الآن أدخل العدد الأقصى للطلاب (أو أرسل 0 لعدد غير محدود):\n"
-            f"Now enter the maximum number of students (or send 0 for unlimited):\n\n"
-            f"مثال / Example: 50\n\n"
+            f"✅ [translate:السعر:] {price:.2f} SDG\n\n"
+            f"[translate:الآن أدخل سعر الشهادة (أدخل 0 إذا لم تكن متاحة):]\n"
+            f"Now enter the certificate price (enter 0 if not available):\n\n"
+            f"[translate:مثال] / Example: 2000\n\n"
             f"Send /cancel to abort.",
             parse_mode='Markdown'
         )
         
-        return COURSE_MAX_STUDENTS  # Skip COURSE_GROUP_LINK state
+        return COURSE_CERTIFICATE_PRICE  # ← NEW STATE
+    
+    except ValueError:
+        await update.message.reply_text("[translate:❌ السعر غير صالح. أدخل رقماً.]\nInvalid price. Please enter a number.")
+        return COURSE_PRICE
+
         
     except ValueError:
         await update.message.reply_text("❌ السعر غير صالح. أدخل رقماً.\nInvalid price. Please enter a number.")
@@ -340,7 +343,9 @@ async def course_reg_close_date_input(update: Update, context: ContextTypes.DEFA
 📝 الوصف / Description:
 {course_data['description'][:200]}{'...' if len(course_data['description']) > 200 else ''}
 
-💰 السعر / Price: {course_data['price']:.2f} SDG
+💰 السعر / Price: {course_data['price']:.2f} 
+💰 [translate:السعر] / Price: {course_data['price']:.2f} SDG
+📜 [translate:سعر الشهادة] / Certificate Price: {course_data.get('certificate_price', 0):.2f} SDG
 🔗 رابط المجموعة / Group Link: {course_data.get('group_link') or 'لا يوجد / None'}
 👥 العدد الأقصى / Max Students: {course_data.get('max_students') or 'غير محدود / Unlimited'}
 
@@ -386,6 +391,8 @@ async def course_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
                 course_name=course_data['name'],
                 description=course_data['description'],
                 price=course_data['price'],
+                certificate_price=course_data.get('certificate_price', 0),  # ← ADD
+                certificate_available=course_data.get('certificate_available', False), 
                 telegram_group_link=course_data.get('group_link'),
                 max_students=course_data.get('max_students'),
                 start_date=course_data.get('start_date'),
@@ -849,3 +856,34 @@ async def toggle_course_callback(update: Update, context: ContextTypes.DEFAULT_T
             f"📌 {course.course_name}",
             parse_mode='Markdown'
         )
+
+async def course_certificate_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Receive certificate price"""
+    try:
+        certificate_price = float(update.message.text.strip())
+        
+        if certificate_price < 0:
+            await update.message.reply_text("[translate:❌ السعر يجب أن يكون 0 أو أكثر.]\nPrice must be 0 or more.")
+            return COURSE_CERTIFICATE_PRICE
+        
+        context.user_data['new_course']['certificate_price'] = certificate_price
+        context.user_data['new_course']['certificate_available'] = certificate_price > 0
+        context.user_data['new_course']['group_link'] = None  # Skip group link
+        
+        cert_status = "[translate:✅ متاحة]" if certificate_price > 0 else "[translate:❌ غير متاحة]"
+        
+        # Now continue to MAX STUDENTS
+        await update.message.reply_text(
+            f"✅ [translate:سعر الشهادة:] {certificate_price:.2f} SDG ({cert_status})\n\n"
+            f"[translate:الآن أدخل العدد الأقصى للطلاب (أو أرسل 0 لعدد غير محدود):]\n"
+            f"Now enter the maximum number of students (or send 0 for unlimited):\n\n"
+            f"[translate:مثال] / Example: 50\n\n"
+            f"Send /cancel to abort.",
+            parse_mode='Markdown'
+        )
+        
+        return COURSE_MAX_STUDENTS
+    
+    except ValueError:
+        await update.message.reply_text("[translate:❌ السعر غير صالح. أدخل رقماً.]\nInvalid price. Please enter a number.")
+        return COURSE_CERTIFICATE_PRICE

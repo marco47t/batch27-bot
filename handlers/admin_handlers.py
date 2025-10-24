@@ -671,3 +671,51 @@ async def manual_daily_report_command(update: Update, context: ContextTypes.DEFA
     except Exception as e:
         logger.error(f"Error generating manual daily report: {e}")
         await update.message.reply_text(f"❌ Error generating report: {str(e)}")
+
+async def set_certificate_price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Admin command to set certificate price for a course
+    Usage: /setcert <course_id> <price>
+    Example: /setcert 1 2000
+    """
+    if not is_admin_user(update.effective_user.id):
+        await update.message.reply_text("❌ Admin access only.")
+        return
+    
+    try:
+        # Parse command: /setcert 1 2000
+        args = context.args
+        if len(args) != 2:
+            await update.message.reply_text(
+                "❌ Usage: /setcert <course_id> <price>\n"
+                "Example: /setcert 1 2000"
+            )
+            return
+        
+        course_id = int(args[0])
+        certificate_price = float(args[1])
+        
+        with get_db() as session:
+            from database.models import Course
+            course = session.query(Course).filter(Course.course_id == course_id).first()
+            
+            if not course:
+                await update.message.reply_text(f"❌ Course {course_id} not found.")
+                return
+            
+            course.certificate_price = certificate_price
+            course.certificate_available = certificate_price > 0
+            session.commit()
+            
+            status = "[translate:متاحة]" if certificate_price > 0 else "[translate:غير متاحة]"
+            await update.message.reply_text(
+                f"✅ Certificate price updated!\n\n"
+                f"📚 Course: {course.course_name}\n"
+                f"📜 Certificate Price: {certificate_price} SDG\n"
+                f"Status: {status}"
+            )
+    
+    except ValueError:
+        await update.message.reply_text("❌ Invalid numbers. Use: /setcert <course_id> <price>")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)}")

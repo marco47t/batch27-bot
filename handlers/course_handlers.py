@@ -5,8 +5,9 @@ Course selection and cart management handlers
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from database import crud, get_db
-from database.models import PaymentStatus
+from database.models import Course, PaymentStatus
 from utils.keyboards import (
+    certificate_option_keyboard,
     course_selection_keyboard, 
     cart_keyboard, 
     back_to_main_keyboard,
@@ -679,3 +680,91 @@ async def handle_legal_name_during_registration(update: Update, context: Context
                     reply_markup=back_to_main_keyboard()
                 )
                 context.user_data.clear()
+
+# Add after your existing course selection handler
+
+async def course_add_to_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle adding course to cart - ask about certificate first"""
+    query = update.callback_query
+    await query.answer()
+    
+    telegram_user_id = query.from_user.id
+    course_id = int(query.data.split('_')[-1])
+    
+    with get_db() as session:
+        user = crud.get_or_create_user(session, telegram_user_id)
+        course = session.query(Course).filter(Course.course_id == course_id).first()
+        
+        if not course:
+            await query.edit_message_text("❌ الدورة غير موجودة")
+            return
+        
+        # Check if certificate is available for this course
+        if course.certificate_available and course.certificate_price > 0:
+            # Ask user if they want certificate
+            message = f"""
+📚 <b>{course.course_name}</b>
+
+💰 سعر الدورة: {course.price} SDG
+📜 سعر الشهادة: {course.certificate_price} SDG
+
+هل تريد التسجيل مع شهادة؟
+Do you want to register with a certificate?
+"""
+            await query.edit_message_text(
+                message,
+                reply_markup=certificate_option_keyboard(course_id),
+                parse_mode='HTML'
+            )
+        else:
+            # No certificate available, add directly to cart
+            crud.add_to_cart_with_certificate(session, user.user_id, course_id, with_certificate=False)
+            
+            await query.edit_message_text(
+                f"✅ تمت إضافة {course.course_name} إلى السلة\n\nAdded to cart!",
+                reply_markup=course_selection_keyboard()
+            )
+
+
+async def certificate_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle certificate yes/no choice"""
+    query = update.callback_query
+    await query.answer()
+    
+    telegram_user_id = query.from_user.id
+    callback_data = query.data  # cert_yes_123 or cert_no_123
+    
+    with_certificate = callback_data.startswith('cert_yes')
+    course_id = int(callback_data.split('_')[-1])
+    
+    with get_db() as session:
+        user = crud.get_or_create_user(session, telegram_user_id)
+        course = session.query(Course).filter(Course.course_id == course_id).first()
+        
+        if not course:
+            await query.edit_message_text("❌ الدورة غير موجودة")
+            return
+        
+        # Add to cart with certificate preference
+        crud.add_to_cart_with_certificate(session, user.user_id, course_id, with_certificate)
+        
+        # Calculate price
+        total_price = course.price
+        if with_certificate:
+            total_price += course.certificate_price
+        
+        cert_status = "✅ مع شهادة" if with_certificate else "❌ بدون شهادة"
+        
+        message = f"""
+✅ تمت الإضافة إلى السلة!
+Added to cart!
+
+📚 {course.course_name}
+💰 السعر الإجمالي: {total_price} SDG
+{cert_status}
+"""
+        
+        await query.edit_message_text(
+            message,
+            reply_markup=course_selection_keyboard()
+        )

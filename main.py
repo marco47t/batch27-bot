@@ -514,6 +514,9 @@ def main():
     ))
 
 
+    application.add_handler(CommandHandler("setcert", admin_handlers.set_certificate_price_command))
+
+
     # GROUP REGISTRATION COMMAND
     # ==========================
     application.add_handler(CommandHandler("register_group", group_registration.register_group_command))

@@ -59,6 +59,8 @@ class Course(Base):
     course_name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     price = Column(Float, nullable=False)
+    certificate_price = Column(Float, nullable=False)
+    certificate_available = Column(Boolean, default=False, nullable=False)
     telegram_group_link = Column(String(500), nullable=True)
     telegram_group_id = Column(String(100), nullable=True)
     start_date = Column(DateTime, nullable=True)
@@ -88,6 +90,7 @@ class Enrollment(Base):
     enrollment_date = Column(DateTime, default=func.now(), nullable=False)
     payment_status = Column(Enum(PaymentStatus), default=PaymentStatus.PENDING, nullable=False)
     payment_amount = Column(Float, nullable=True)
+    with_certificate = Column(Boolean, default=False, nullable=False)
     amount_paid = Column(Float, default=0, nullable=False)  # ✅ ADD THIS - Track partial payments
     receipt_image_path = Column(String(500), nullable=True)
     verification_date = Column(DateTime, nullable=True)
@@ -151,6 +154,7 @@ class Cart(Base):
     user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False, index=True)
     course_id = Column(Integer, ForeignKey("courses.course_id", ondelete="CASCADE"), nullable=False, index=True)
     added_date = Column(DateTime, default=func.now(), nullable=False)
+    with_certificate = Column(Boolean, default=False, nullable=False)
     
     # Relationships
     user = relationship("User", back_populates="cart_items")

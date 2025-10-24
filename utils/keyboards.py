@@ -227,3 +227,21 @@ def failed_receipt_admin_keyboard(enrollment_ids_str: str, telegram_user_id: int
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
+
+
+def certificate_option_keyboard(course_id: int) -> InlineKeyboardMarkup:
+    """
+    Keyboard to ask user if they want certificate
+    """
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ مع شهادة (With Certificate)", callback_data=f"cert_yes_{course_id}"),
+        ],
+        [
+            InlineKeyboardButton("❌ بدون شهادة (Without Certificate)", callback_data=f"cert_no_{course_id}"),
+        ],
+        [
+            InlineKeyboardButton("🔙 العودة (Back)", callback_data="course_selection_menu")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
