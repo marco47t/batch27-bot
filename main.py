@@ -516,7 +516,10 @@ def main():
 
 
     application.add_handler(CommandHandler("setcert", admin_handlers.set_certificate_price_command))
-
+    application.add_handler(CallbackQueryHandler(
+        course_handlers.certificate_choice_callback, 
+        pattern="^cert_(yes|no)_"
+    ))
 
     # GROUP REGISTRATION COMMAND
     # ==========================

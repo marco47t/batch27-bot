@@ -942,3 +942,4 @@ def calculate_cart_total(session: Session, user_id: int) -> dict:
         'total': total_course_price + total_certificate_price,
         'courses': course_details
     }
+
