@@ -229,15 +229,34 @@ async def course_select_callback(update: Update, context: ContextTypes.DEFAULT_T
         logger.info(f"Course {course_id} not in cart, adding now...")
         
         # Add to cart - use internal_user_id
-        try:
-            cart_item = crud.add_to_cart(session, internal_user_id, course_id)
-            session.commit()
-            logger.info(f"✅ Successfully added course {course_id} to cart for user {telegram_user_id} (internal ID: {internal_user_id}), cart_id={cart_item.cart_id}")
-        except Exception as e:
-            logger.error(f"❌ Error adding to cart: {e}")
-            session.rollback()
-            await query.answer("❌ حدث خطأ أثناء إضافة الدورة للسلة", show_alert=True)
-            return
+        if course.certificate_available and course.certificate_price > 0:
+            # Ask user if they want certificate
+            message = f"""
+        📚 <b>{course.course_name}</b>
+
+        💰 سعر الدورة: {course.price:.0f} SDG
+        📜 سعر الشهادة: {course.certificate_price:.0f} SDG
+
+        هل تريد التسجيل مع شهادة؟
+        Do you want to register with a certificate?
+        """
+            await query.edit_message_text(
+                message,
+                reply_markup=certificate_option_keyboard(course_id),
+                parse_mode='HTML'
+            )
+            return  # ← Stop here, wait for certificate choice
+        else:
+            # No certificate available, add directly to cart (old behavior)
+            try:
+                cart_item = crud.add_to_cart(session, internal_user_id, course_id)
+                session.commit()
+                logger.info(f"✅ Successfully added course {course_id} to cart for user {telegram_user_id} (internal ID: {internal_user_id}), cart_id={cart_item.cart_id}")
+            except Exception as e:
+                logger.error(f"❌ Error adding to cart: {e}")
+                session.rollback()
+                await query.answer("❌ حدث خطأ أثناء إضافة الدورة للسلة", show_alert=True)
+                return
         
         await query.answer("✅ تمت إضافة الدورة إلى السلة!", show_alert=True)
         logger.info(f"Showing success message to user {telegram_user_id}")
