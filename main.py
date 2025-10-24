@@ -255,6 +255,7 @@ def main():
                 admin_course_management.COURSE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_name_input)],
                 admin_course_management.COURSE_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_description_input)],
                 admin_course_management.COURSE_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_price_input)],
+                admin_course_management.COURSE_CERTIFICATE_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_certificate_price_input)],
                 admin_course_management.COURSE_MAX_STUDENTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_max_students_input)],
                 admin_course_management.COURSE_START_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_start_date_input)],
                 admin_course_management.COURSE_END_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_end_date_input)],
