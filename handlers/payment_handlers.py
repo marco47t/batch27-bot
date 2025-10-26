@@ -351,12 +351,26 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
             if enrollment and enrollment.user_id == internal_user_id:
                 enrollments_to_update.append(enrollment)
         else:
-            logger.info(f"Processing initial payment for user {telegram_user_id}")
-            current_payment_enrollment_ids = context.user_data.get("current_payment_enrollment_ids", [])
-            for eid in current_payment_enrollment_ids:
-                enrollment = crud.get_enrollment_by_id(session, eid)
-                if enrollment and enrollment.user_id == internal_user_id:
-                    enrollments_to_update.append(enrollment)
+            # Check for partial payment continuation (stored enrollment IDs)
+            current_payment_enrollment_ids = context.user_data.get("current_payment_enrollment_ids")
+            
+            if current_payment_enrollment_ids:
+                # Parse enrollment IDs from string (e.g., "139" or "139,140")
+                if isinstance(current_payment_enrollment_ids, str):
+                    enrollment_ids = [int(eid.strip()) for eid in current_payment_enrollment_ids.split(',') if eid.strip()]
+                else:
+                    enrollment_ids = current_payment_enrollment_ids  # Already a list
+                
+                logger.info(f"🔄 Continuing partial payment for user {telegram_user_id}, stored enrollments: {enrollment_ids}")
+                
+                for eid in enrollment_ids:
+                    enrollment = crud.get_enrollment_by_id(session, eid)
+                    if enrollment and enrollment.user_id == internal_user_id:
+                        enrollments_to_update.append(enrollment)
+            else:
+                # Initial payment - get PENDING enrollments
+                logger.info(f"Processing initial payment for user {telegram_user_id}")
+                enrollments_to_update = crud.get_user_pending_enrollments(session, internal_user_id)
         
         if not enrollments_to_update:
             logger.error(f"No enrollments found for user {telegram_user_id}")
@@ -367,6 +381,7 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             return
+
         
         enrollment_ids_to_update = [e.enrollment_id for e in enrollments_to_update]
         enrollment_ids_str = ', '.join(map(str, enrollment_ids_to_update))
