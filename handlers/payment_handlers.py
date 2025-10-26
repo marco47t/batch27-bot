@@ -1001,7 +1001,7 @@ ID: <code>{telegram_user_id}</code>
             partial_message = (
                 f"⚠️ **المبلغ المدفوع ناقص**\n"
                 f"💰 **المبلغ المدفوع:** {extracted_amount:.0f} SDG\n"
-                f"✅ تم التحقق من الإيصال\n\n"
+                f"✅ تم التحقق من الإيصال وإضافة المبلغ\n\n"
                 f"📊 **توزيع الدفع:**\n"
             )
             
@@ -1020,13 +1020,18 @@ ID: <code>{telegram_user_id}</code>
                     partial_message += f" ✅ مكتمل\n"
             
             partial_message += (
-                f"\n📊 **المبلغ المطلوب:** {expected_amount_for_gemini:.0f} SDG\n"
+                f"\n📊 **المبلغ المطلوب الكلي:** {expected_amount_for_gemini:.0f} SDG\n"
                 f"⚠️ **المبلغ المتبقي:** {remaining_total:.0f} SDG\n\n"
-                f"📝 **لإكمال الدفع:**\n"
+                f"💡 **لديك خياران لإكمال الدفع:**\n\n"
+                f"**الخيار 1: إرسال الإيصال الآن (مباشرة)** ⚡\n"
+                f"• حوّل المبلغ المتبقي ({remaining_total:.0f} SDG)\n"
+                f"• سيتم إضافة المبلغ الجديد للمبلغ السابق\n\n"
+                f"**الخيار 2: الدفع لاحقاً** 🕐\n"
                 f"1️⃣ اذهب إلى **دوراتي** من القائمة الرئيسية\n"
-                f"2️⃣ اختر الدورة\n"
-                f"3️⃣ اضغط **إكمال الدفع** وأرسل إيصال المبلغ المتبقي\n\n"
-                f"✅ سيتم تفعيل التسجيل بعد استلام المبلغ الكامل"
+                f"2️⃣ اختر الدورة التي تريد إكمال دفعها\n"
+                f"3️⃣ اضغط **دفع** ثم أرسل إيصال المبلغ المتبقي\n\n"
+                f"✅ سيتم تفعيل التسجيل تلقائياً عند استلام المبلغ الكامل\n"
+                f"📝 يمكنك الدفع على دفعات متعددة - كل دفعة تُضاف للسابقة"
             )
             
             await update.message.reply_text(
@@ -1034,7 +1039,12 @@ ID: <code>{telegram_user_id}</code>
                 reply_markup=back_to_main_keyboard(),
                 parse_mode='Markdown'
             )
-            
+            context.user_data["awaiting_receipt_upload"] = True
+            context.user_data["current_payment_enrollment_ids"] = enrollment_ids_str
+            context.user_data["current_payment_total"] = remaining_total
+            context.user_data["partial_payment_mode"] = True  # NEW FLAG
+
+            logger.info(f"Set up immediate receipt listening for partial payment - user {telegram_user_id}, remaining: {remaining_total:.0f}")
             # Send admin notification
             admin_partial_msg = f"""
         ⚠️ PARTIAL PAYMENT RECEIVED
