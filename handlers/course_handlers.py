@@ -343,20 +343,20 @@ async def course_deselect_callback(update: Update, context: ContextTypes.DEFAULT
                 crud.Enrollment.payment_status == PaymentStatus.VERIFIED
             ).count()
             course_enrollment_counts[c.course_id] = count
+        
+        # ✅ CALCULATE CART TOTAL INSIDE SESSION BLOCK
+        cart_totals = crud.calculate_cart_total(session, internal_user_id)
+        cart_total = cart_totals['total']
     
-    await query.answer(f"🗑️ تمت إزالة {course.course_name} من السلة!")
+    # ✅ NOW OUTSIDE SESSION - answer and edit message
+    await query.answer(f"[translate:🗑️ تمت إزالة {course.course_name} من السلة!]")
     logger.info(f"User {telegram_user_id} removed course {course_id} from cart")
     log_user_action(telegram_user_id, "course_deselected", f"course_id={course_id}")
     
-    cart_totals = crud.calculate_cart_total(session, internal_user_id)
-    cart_total = cart_totals['total']
-    # Calculate cart total
     await query.edit_message_text(
         course_list_message(available_courses, course_enrollment_counts),
         reply_markup=course_selection_keyboard(available_courses, cart_course_ids, cart_total)
     )
-
-
 
 async def view_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """View shopping cart with pending courses showing remaining balance"""
