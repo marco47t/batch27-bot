@@ -329,7 +329,7 @@ async def course_deselect_callback(update: Update, context: ContextTypes.DEFAULT
         user_enrollments = crud.get_user_enrollments(session, internal_user_id)
         enrolled_course_ids = [e.course_id for e in user_enrollments]
         
-        all_courses = crud.get_all_courses(session)
+        all_courses = crud.get_available_courses_for_registration(session)
         available_courses = [c for c in all_courses if c.course_id not in enrolled_course_ids]
         
         cart_items = crud.get_user_cart(session, internal_user_id)
