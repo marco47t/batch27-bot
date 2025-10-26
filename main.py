@@ -43,7 +43,7 @@ from database import crud, get_db, init_db
 from utils.helpers import handle_error
 import config
 from utils.logging_config import setup_cloudwatch_logging
-
+from handlers.payment_handlers import cancel_payment_callback
 # Setup CloudWatch + Console logging with 3 separate log groups
 setup_cloudwatch_logging(aws_region='eu-north-1')  # Change to your AWS region
 
@@ -371,6 +371,12 @@ def main():
         payment_handlers.proceed_to_payment_callback, 
         pattern='proceed_payment'
     ))
+    # Add this after the proceed_to_payment_callback handler
+    application.add_handler(CallbackQueryHandler(
+        payment_handlers.cancel_payment_callback,
+        pattern='cancel_payment'
+    ))
+
     application.add_handler(CallbackQueryHandler(
         menu_handlers.courses_menu_callback, 
         pattern=f'^{config.CallbackPrefix.BACK_COURSES}'

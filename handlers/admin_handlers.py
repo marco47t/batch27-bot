@@ -601,26 +601,28 @@ async def send_daily_summary_report(context: ContextTypes.DEFAULT_TYPE):
     sudan_tz = pytz.timezone('Africa/Khartoum')
     
     # Calculate yesterday's date range in Sudan time
+    # Calculate today's date range in Sudan time
     now_sudan = datetime.now(sudan_tz)
-    today_sudan = now_sudan.replace(hour=0, minute=0, second=0, microsecond=0)
-    yesterday_sudan = today_sudan - timedelta(days=1)
-    
+    today_start_sudan = now_sudan.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end_sudan = today_start_sudan + timedelta(days=1)
+
     # Convert to UTC for database queries (database stores in UTC)
-    yesterday = yesterday_sudan.astimezone(pytz.UTC).replace(tzinfo=None)
-    today = today_sudan.astimezone(pytz.UTC).replace(tzinfo=None)
-    
-    logger.info(f"Generating daily summary report for {yesterday.strftime('%Y-%m-%d')}")
+    today_start = today_start_sudan.astimezone(pytz.UTC).replace(tzinfo=None)
+    today_end = today_end_sudan.astimezone(pytz.UTC).replace(tzinfo=None)
+
+    logger.info(f"Generating daily summary report for {today_start_sudan.strftime('%Y-%m-%d')}")
+
     
     try:
         with get_db() as session:
-            # Get verified enrollments from yesterday
-            enrollments = crud.get_daily_verified_enrollments(session, yesterday, today)
+            # Get verified enrollments from today
+            enrollments = crud.get_daily_verified_enrollments(session, today_start, today_end)
             
             # Format the report
             from utils.messages import daily_summary_report_message
             report_message = daily_summary_report_message(
                 enrollments, 
-                yesterday.strftime('%Y-%m-%d')
+                today_start_sudan.strftime('%Y-%m-%d')
             )
             
             # Send to admin chat

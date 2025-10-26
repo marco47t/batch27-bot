@@ -1321,3 +1321,58 @@ ID: {telegram_user_id}
             logger.info(f"Cleaned up temp file: {temp_path}")
     except Exception as e:
         logger.warning(f"Failed to clean up temp file {temp_path}: {e}")
+
+async def cancel_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel payment and delete pending enrollments"""
+    query = update.callback_query
+    await query.answer("🛑 Payment cancelled.")
+    
+    telegram_user_id = query.from_user.id
+    
+    try:
+        with get_db() as session:
+            db_user = crud.get_or_create_user(
+                session,
+                telegram_user_id=telegram_user_id,
+                username=query.from_user.username,
+                first_name=query.from_user.first_name,
+                last_name=query.from_user.last_name
+            )
+            session.flush()
+            internal_user_id = db_user.user_id
+            
+            # Get pending enrollments for this user
+            from database.models import Enrollment
+            pending_enrollments = session.query(Enrollment).filter(
+                Enrollment.user_id == internal_user_id,
+                Enrollment.payment_status == PaymentStatus.PENDING
+            ).all()
+            
+            count = len(pending_enrollments)
+            for enrollment in pending_enrollments:
+                session.delete(enrollment)
+            session.commit()
+            
+            logger.info(f"Cancelled {count} pending enrollments for user {telegram_user_id}")
+            
+        await query.edit_message_text(
+            f"🛑 **Payment Cancelled**\n\n"
+            f"Cancelled {count} pending enrollment(s).\n\n"
+            f"Use /start to return to main menu.",
+            parse_mode='Markdown',
+            reply_markup=back_to_main_keyboard()
+        )
+        
+        # Clear context
+        context.user_data["awaiting_receipt_upload"] = False
+        context.user_data.pop("cart_total_for_payment", None)
+        context.user_data.pop("pending_enrollment_ids_for_payment", None)
+        context.user_data.pop("current_payment_enrollment_ids", None)
+        context.user_data.pop("current_payment_total", None)
+        
+    except Exception as e:
+        logger.error(f"Cancel payment error for user {telegram_user_id}: {e}")
+        await query.edit_message_text(
+            "❌ Error cancelling payment. Please contact admin.",
+            reply_markup=back_to_main_keyboard()
+        )
