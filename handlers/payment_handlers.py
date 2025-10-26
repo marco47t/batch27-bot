@@ -1088,15 +1088,13 @@ ID: <code>{telegram_user_id}</code>
             except Exception as e:
                 logger.error(f"Failed to send admin notification: {e}")
             
-            # Clean up context
-            context.user_data["awaiting_receipt_upload"] = False
-            context.user_data.pop("cart_total_for_payment", None)
-            context.user_data.pop("pending_enrollment_ids_for_payment", None)
-            context.user_data.pop("current_payment_enrollment_ids", None)
-            context.user_data.pop("current_payment_total", None)
-            context.user_data.pop("resubmission_enrollment_id", None)
-            context.user_data.pop("reupload_amount", None)
-            
+            # ✅ KEEP CONTEXT ALIVE for immediate next receipt
+            context.user_data["awaiting_receipt_upload"] = True  # KEEP TRUE
+            context.user_data["current_payment_enrollment_ids"] = enrollment_ids_str
+            context.user_data["current_payment_total"] = remaining_total
+            # Don't clear these - keep them for next receipt
+            logger.info(f"Set up immediate receipt listening for partial payment - user {telegram_user_id}, remaining: {remaining_total:.0f}")
+
             # Clean up temp file
             if os.path.exists(temp_path):
                 os.remove(temp_path)
