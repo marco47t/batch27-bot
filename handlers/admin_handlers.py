@@ -78,11 +78,19 @@ async def admin_pending_callback(update: Update, context: ContextTypes.DEFAULT_T
         
         # Display first transaction to review (can add pagination)
         transaction = transactions[0]
-        await query.edit_message_text(
-            admin_transaction_message(transaction),
-            reply_markup=admin_transaction_keyboard(transaction.transaction_id),
-            parse_mode='Markdown'
-        )
+
+        try:
+            await query.edit_message_text(
+                admin_transaction_message(transaction),
+                reply_markup=admin_transaction_keyboard(transaction.transaction_id),
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            if "message is not modified" in str(e).lower():
+                await query.answer("Already viewing this transaction.", show_alert=False)
+            else:
+                raise
+
 
 
 async def notify_user_payment_decision(context: ContextTypes.DEFAULT_TYPE, 
@@ -162,7 +170,7 @@ async def admin_approve_callback(update: Update, context: ContextTypes.DEFAULT_T
     user_chat_id, course_names, group_links = None, [], []
 
     with get_db() as session:
-        transaction = crud.update_transaction(session, transaction_id, status="approved", admin_reviewed=admin_user.id)
+        transaction = crud.update_transaction(session, transaction_id, status="VERIFIED", admin_reviewed=admin_user.id)
         if not transaction:
             await query.edit_message_text("❌ Transaction not found.")
             return
