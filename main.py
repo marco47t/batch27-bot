@@ -35,8 +35,7 @@ from handlers import (
     admin_reviews,
     admin_pending_registrations,
     admin_instructor_management,
-    instructor_reviews,
-    
+    instructor_reviews
 )
 from handlers.course_handlers import course_dates_callback, course_description_callback, handle_legal_name_during_registration
 from handlers.support_handlers import contact_admin_callback, contact_admin_command, handle_support_message
