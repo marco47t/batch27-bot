@@ -70,14 +70,12 @@ class Course(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     max_students = Column(Integer, nullable=True)
     created_date = Column(DateTime, default=func.now(), nullable=False)
-    instructor = Column(Text, nullable=True)
     instructor_id = Column(Integer, ForeignKey('instructors.instructor_id', ondelete='SET NULL'), nullable=True)  # ← ADD THIS
 
     # Relationships
     enrollments = relationship("Enrollment", back_populates="course", cascade="all, delete-orphan")
     cart_items = relationship("Cart", back_populates="course", cascade="all, delete-orphan")
     reviews = relationship("CourseReview", back_populates="course", cascade="all, delete-orphan")  # ✅ ADD THIS
-    instructor_reviews = relationship("InstructorReview", back_populates="course", cascade="all, delete-orphan")
     instructor = relationship("Instructor", back_populates="courses")  # ← ADD THIS
     def __repr__(self):
         return f"<Course {self.course_id}: {self.course_name}>"
@@ -221,7 +219,7 @@ class InstructorReview(Base):
     __tablename__ = "instructor_reviews"
     
     review_id = Column(Integer, primary_key=True, autoincrement=True)
-    course_id = Column(Integer, ForeignKey('courses.course_id', ondelete='CASCADE'), nullable=False)
+    instructor_id = Column(Integer, ForeignKey('instructors.instructor_id', ondelete='CASCADE'), nullable=False)
     user_id = Column(Integer, ForeignKey('users.user_id', ondelete='CASCADE'), nullable=False)
     rating = Column(Integer, nullable=False)  # 1-5 stars
     review_text = Column(Text, nullable=True)
@@ -229,7 +227,7 @@ class InstructorReview(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    course = relationship("Course", back_populates="instructor_reviews")
+    instructor = relationship("Instructor", back_populates="reviews")
     user = relationship("User", back_populates="instructor_reviews")
 
 class Instructor(Base):
