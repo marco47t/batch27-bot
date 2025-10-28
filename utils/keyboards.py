@@ -249,12 +249,37 @@ def certificate_option_keyboard(course_id: int) -> InlineKeyboardMarkup:
 
 # ADD this NEW function to keyboards.py
 
-def course_info_buttons_keyboard(course_id: int) -> InlineKeyboardMarkup:
+def course_info_buttons_keyboard(course_id: int, has_instructor: bool = False) -> InlineKeyboardMarkup:
     """Button menu for course details"""
     keyboard = [
         [InlineKeyboardButton("📋 الوصف | Description", callback_data=f"course_desc_{course_id}")],
         [InlineKeyboardButton("📅 التواريخ | Dates", callback_data=f"course_dates_{course_id}")],
+    ]
+    
+    # Add instructor reviews button if instructor exists
+    if has_instructor:
+        keyboard.append([InlineKeyboardButton("⭐ تقييمات المدرب | Instructor Reviews", callback_data=f"course_reviews_{course_id}")])
+    
+    keyboard.extend([
         [InlineKeyboardButton("→ عودة لقائمة الدورات", callback_data="course_details_menu")],
         [InlineKeyboardButton("→ العودة للقائمة الرئيسية", callback_data=CallbackPrefix.BACK_MAIN)]
+    ])
+    
+    return InlineKeyboardMarkup(keyboard)
+
+
+def review_instructor_keyboard(course_id: int) -> InlineKeyboardMarkup:
+    """Rating keyboard for instructor review"""
+    keyboard = [
+        [
+            InlineKeyboardButton("⭐", callback_data=f"rate_instructor_{course_id}_1"),
+            InlineKeyboardButton("⭐⭐", callback_data=f"rate_instructor_{course_id}_2"),
+            InlineKeyboardButton("⭐⭐⭐", callback_data=f"rate_instructor_{course_id}_3"),
+        ],
+        [
+            InlineKeyboardButton("⭐⭐⭐⭐", callback_data=f"rate_instructor_{course_id}_4"),
+            InlineKeyboardButton("⭐⭐⭐⭐⭐", callback_data=f"rate_instructor_{course_id}_5"),
+        ],
+        [InlineKeyboardButton("❌ إلغاء | Cancel", callback_data=f"course_desc_{course_id}")]
     ]
     return InlineKeyboardMarkup(keyboard)

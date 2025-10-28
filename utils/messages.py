@@ -579,9 +579,38 @@ Click buttons below to view details:
 """
 
 
-def course_description_details(course) -> str:
-    """Show course description only"""
+def course_description_details(course, session) -> str:
+    """Show course description with full instructor profile"""
     description = course.description or "لا يوجد وصف متاح\nNo description available"
+    
+    # Instructor profile section
+    instructor_section = ""
+    if course.instructor:
+        from database import crud
+        
+        instructor = course.instructor  # Already loaded via relationship
+        avg_rating = crud.get_instructor_average_rating(session, instructor.instructor_id)
+        review_count = len(crud.get_instructor_reviews(session, instructor.instructor_id))
+        
+        rating_display = ""
+        if avg_rating:
+            stars = "⭐" * int(avg_rating)
+            rating_display = f"{stars} {avg_rating}/5 ({review_count} تقييم)"
+        else:
+            rating_display = "لا توجد تقييمات بعد"
+        
+        instructor_section = f"""
+
+━━━━━━━━━━━━━━━━━━━━
+👨‍🏫 **معلومات المدرب**
+**Instructor Info**
+
+**الاسم:** {instructor.name}
+📚 **التخصص:** {instructor.specialization or 'غير محدد'}
+⭐ **التقييم:** {rating_display}
+
+**نبذة:**
+{instructor.bio or 'لا توجد معلومات'}"""
     
     return f"""📋 **وصف الدورة**
 **Course Description**
@@ -591,49 +620,47 @@ def course_description_details(course) -> str:
 
 {description}
 
-💰 السعر: {course.price:.0f} جنيه سوداني
+💰 السعر: {course.price:.0f} جنيه سوداني{instructor_section}
 """
 
 
-def course_dates_details(course, enrollment_count: int = 0) -> str:
-    """Show course dates and schedule"""
-    from datetime import datetime
+
+def instructor_reviews_message(course, reviews, avg_rating) -> str:
+    """Show instructor reviews"""
+    if not course.instructor:
+        return "❌ لا يوجد معلومات عن المدرب\nNo instructor info available"
     
-    # Registration dates
-    reg_info = ""
-    if course.registration_open_date or course.registration_close_date:
-        reg_info = "\n📅 **فترة التسجيل:**"
-        
-        if course.registration_open_date:
-            reg_info += f"\n🟢 يفتح: {course.registration_open_date.strftime('%Y-%m-%d')}"
-        
-        if course.registration_close_date:
-            reg_info += f"\n🔴 يغلق: {course.registration_close_date.strftime('%Y-%m-%d')}"
+    rating_display = ""
+    if avg_rating:
+        stars = "⭐" * int(avg_rating)
+        rating_display = f"{stars} {avg_rating}/5"
+    else:
+        rating_display = "لا توجد تقييمات بعد"
     
-    # Course duration
-    course_info = ""
-    if course.start_date or course.end_date:
-        course_info = "\n\n📚 **مدة الدورة:**"
-        
-        if course.start_date:
-            course_info += f"\n▶️ البداية: {course.start_date.strftime('%Y-%m-%d')}"
-        
-        if course.end_date:
-            course_info += f"\n🏁 النهاية: {course.end_date.strftime('%Y-%m-%d')}"
-    
-    # Capacity
-    capacity = ""
-    if course.max_students:
-        remaining = course.max_students - enrollment_count
-        capacity = f"\n\n👥 المقاعد: {enrollment_count}/{course.max_students}"
-        if remaining <= 0:
-            capacity += " (ممتلئة)"
-        elif remaining <= 5:
-            capacity += f" ({remaining} متبقي)"
-    
-    return f"""📅 **التواريخ والجدول**
-**Dates & Schedule**
+    header = f"""⭐ **تقييمات المدرب**
+**Instructor Reviews**
 ━━━━━━━━━━━━━━━━━━━━
 
-📚 {course.course_name}{reg_info}{course_info}{capacity}
+👨‍🏫 {course.instructor}
+📊 التقييم: {rating_display}
+📝 عدد التقييمات: {len(reviews)}
+
 """
+    
+    if not reviews:
+        return header + "\nلا توجد تقييمات بعد. كن أول من يقيّم!\nNo reviews yet. Be the first to review!"
+    
+    reviews_text = ""
+    for review in reviews[:10]:  # Show last 10 reviews
+        stars = "⭐" * review.rating
+        user_name = f"User {review.user_id}"  # You can improve this with actual user names
+        review_text = review.review_text or ""
+        date = review.created_at.strftime('%Y-%m-%d')
+        
+        reviews_text += f"\n{stars} - {user_name} ({date})\n"
+        if review_text:
+            reviews_text += f"💬 {review_text}\n"
+        reviews_text += "━━━━━━━━━━━━━━━━━\n"
+    
+    return header + reviews_text
+

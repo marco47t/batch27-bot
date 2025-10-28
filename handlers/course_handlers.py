@@ -212,11 +212,15 @@ async def course_description_callback(update: Update, context: ContextTypes.DEFA
         from utils.messages import course_description_details
         from utils.keyboards import course_info_buttons_keyboard
         
+        # Pass session to function
+        message = course_description_details(course, session)
+        
         await query.edit_message_text(
-            course_description_details(course),
-            reply_markup=course_info_buttons_keyboard(course_id),
+            message,
+            reply_markup=course_info_buttons_keyboard(course_id, has_instructor=bool(course.instructor)),
             parse_mode='Markdown'
         )
+
 
 
 async def course_dates_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

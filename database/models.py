@@ -46,7 +46,7 @@ class User(Base):
     cart_items = relationship("Cart", back_populates="user", cascade="all, delete-orphan")
     reviews = relationship("CourseReview", back_populates="user", cascade="all, delete-orphan")  # ✅ ADD THIS
     notification_preferences = relationship("NotificationPreference", back_populates="user", uselist=False, cascade="all, delete-orphan")  # ✅ ADD THIS
-    
+    instructor_reviews = relationship("InstructorReview", back_populates="user")  # ← ADD THIS
     def __repr__(self):
         return f"<User {self.user_id}: {self.first_name}>"
 
@@ -70,12 +70,15 @@ class Course(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     max_students = Column(Integer, nullable=True)
     created_date = Column(DateTime, default=func.now(), nullable=False)
-    
+    instructor = Column(Text, nullable=True)
+    instructor_id = Column(Integer, ForeignKey('instructors.instructor_id', ondelete='SET NULL'), nullable=True)  # ← ADD THIS
+
     # Relationships
     enrollments = relationship("Enrollment", back_populates="course", cascade="all, delete-orphan")
     cart_items = relationship("Cart", back_populates="course", cascade="all, delete-orphan")
     reviews = relationship("CourseReview", back_populates="course", cascade="all, delete-orphan")  # ✅ ADD THIS
-    
+    instructor_reviews = relationship("InstructorReview", back_populates="course", cascade="all, delete-orphan")
+    instructor = relationship("Instructor", back_populates="courses")  # ← ADD THIS
     def __repr__(self):
         return f"<Course {self.course_id}: {self.course_name}>"
 
@@ -213,3 +216,36 @@ class NotificationPreference(Base):
     def __repr__(self):
         return f"<NotificationPreference User {self.user_id}>"
 
+class InstructorReview(Base):
+    """Instructor review model - stores student reviews for instructors"""
+    __tablename__ = "instructor_reviews"
+    
+    review_id = Column(Integer, primary_key=True, autoincrement=True)
+    course_id = Column(Integer, ForeignKey('courses.course_id', ondelete='CASCADE'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.user_id', ondelete='CASCADE'), nullable=False)
+    rating = Column(Integer, nullable=False)  # 1-5 stars
+    review_text = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    course = relationship("Course", back_populates="instructor_reviews")
+    user = relationship("User", back_populates="instructor_reviews")
+
+class Instructor(Base):
+    """Instructor model - stores instructor profiles"""
+    __tablename__ = "instructors"
+    
+    instructor_id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), nullable=False)
+    bio = Column(Text, nullable=True)
+    specialization = Column(String(255), nullable=True)
+    email = Column(String(255), nullable=True)
+    phone = Column(String(50), nullable=True)
+    photo_url = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    is_active = Column(Boolean, default=True)
+    
+    # Relationships
+    courses = relationship("Course", back_populates="instructor")
+    reviews = relationship("InstructorReview", back_populates="instructor", cascade="all, delete-orphan")

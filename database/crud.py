@@ -943,3 +943,161 @@ def calculate_cart_total(session: Session, user_id: int) -> dict:
         'courses': course_details
     }
 
+
+# ==================== INSTRUCTOR CRUD ====================
+
+def create_instructor(session, name: str, bio: str = None, specialization: str = None, 
+                     email: str = None, phone: str = None, photo_url: str = None):
+    """Create a new instructor"""
+    from database.models import Instructor
+    
+    instructor = Instructor(
+        name=name,
+        bio=bio,
+        specialization=specialization,
+        email=email,
+        phone=phone,
+        photo_url=photo_url
+    )
+    session.add(instructor)
+    session.commit()
+    return instructor
+
+
+def get_instructor_by_id(session, instructor_id: int):
+    """Get instructor by ID"""
+    from database.models import Instructor
+    return session.query(Instructor).filter(Instructor.instructor_id == instructor_id).first()
+
+
+def get_all_instructors(session, active_only: bool = True):
+    """Get all instructors"""
+    from database.models import Instructor
+    
+    query = session.query(Instructor)
+    if active_only:
+        query = query.filter(Instructor.is_active == True)
+    
+    return query.order_by(Instructor.name).all()
+
+
+def update_instructor(session, instructor_id: int, **kwargs):
+    """Update instructor details"""
+    from database.models import Instructor
+    
+    instructor = session.query(Instructor).filter(Instructor.instructor_id == instructor_id).first()
+    
+    if not instructor:
+        return None
+    
+    for key, value in kwargs.items():
+        if hasattr(instructor, key):
+            setattr(instructor, key, value)
+    
+    session.commit()
+    return instructor
+
+
+def delete_instructor(session, instructor_id: int):
+    """Delete (deactivate) instructor"""
+    from database.models import Instructor
+    
+    instructor = session.query(Instructor).filter(Instructor.instructor_id == instructor_id).first()
+    
+    if instructor:
+        instructor.is_active = False
+        session.commit()
+        return True
+    return False
+
+
+def get_instructor_courses(session, instructor_id: int):
+    """Get all courses by an instructor"""
+    from database.models import Course
+    
+    return session.query(Course).filter(
+        Course.instructor_id == instructor_id,
+        Course.is_active == True
+    ).all()
+
+
+# ==================== INSTRUCTOR REVIEW CRUD ====================
+
+def create_instructor_review(session, instructor_id: int, user_id: int, rating: int, review_text: str = None):
+    """Create or update instructor review"""
+    from database.models import InstructorReview
+    from datetime import datetime
+    
+    # Check if review already exists
+    existing_review = session.query(InstructorReview).filter(
+        InstructorReview.instructor_id == instructor_id,
+        InstructorReview.user_id == user_id
+    ).first()
+    
+    if existing_review:
+        # Update existing review
+        existing_review.rating = rating
+        existing_review.review_text = review_text
+        existing_review.updated_at = datetime.utcnow()
+        session.commit()
+        return existing_review
+    else:
+        # Create new review
+        review = InstructorReview(
+            instructor_id=instructor_id,
+            user_id=user_id,
+            rating=rating,
+            review_text=review_text
+        )
+        session.add(review)
+        session.commit()
+        return review
+
+
+def get_instructor_reviews(session, instructor_id: int):
+    """Get all reviews for an instructor"""
+    from database.models import InstructorReview
+    
+    return session.query(InstructorReview).filter(
+        InstructorReview.instructor_id == instructor_id
+    ).order_by(InstructorReview.created_at.desc()).all()
+
+
+def get_instructor_average_rating(session, instructor_id: int):
+    """Get average rating for an instructor"""
+    from database.models import InstructorReview
+    from sqlalchemy import func
+    
+    result = session.query(func.avg(InstructorReview.rating)).filter(
+        InstructorReview.instructor_id == instructor_id
+    ).scalar()
+    
+    return round(result, 1) if result else None
+
+
+def get_user_instructor_review(session, instructor_id: int, user_id: int):
+    """Get a specific user's review for an instructor"""
+    from database.models import InstructorReview
+    
+    return session.query(InstructorReview).filter(
+        InstructorReview.instructor_id == instructor_id,
+        InstructorReview.user_id == user_id
+    ).first()
+
+
+def get_user_reviewable_instructors(session, user_id: int):
+    """Get instructors that a user has taken courses from (can review)"""
+    from database.models import Course, Enrollment, Instructor, PaymentStatus
+    
+    # Get all instructors from courses user is enrolled in (VERIFIED status)
+    instructors = session.query(Instructor).join(
+        Course, Course.instructor_id == Instructor.instructor_id
+    ).join(
+        Enrollment, Enrollment.course_id == Course.course_id
+    ).filter(
+        Enrollment.user_id == user_id,
+        Enrollment.payment_status == PaymentStatus.VERIFIED,
+        Instructor.is_active == True
+    ).distinct().all()
+    
+    return instructors

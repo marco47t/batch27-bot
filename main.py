@@ -4,7 +4,7 @@
 from venv import logger
 import os
 import sys
-from database import migrate_add_amount_paid
+from database import admin_instructor_management, migrate_add_amount_paid
 from datetime import timedelta
 import logging
 from telegram import Update
@@ -44,6 +44,8 @@ from utils.helpers import handle_error
 import config
 from utils.logging_config import setup_cloudwatch_logging
 from handlers.payment_handlers import cancel_payment_callback
+from handlers import instructor_reviews
+
 # Setup CloudWatch + Console logging with 3 separate log groups
 setup_cloudwatch_logging(aws_region='eu-north-1')  # Change to your AWS region
 
@@ -551,6 +553,51 @@ def main():
     application.add_handler(CallbackQueryHandler(course_description_callback, pattern=r'^course_desc_\d+$'))
     application.add_handler(CallbackQueryHandler(course_dates_callback, pattern=r'^course_dates_\d+$'))
 
+    # Instructor review handlers
+    application.add_handler(CallbackQueryHandler(instructor_reviews.show_instructor_reviews_callback, pattern=r'^course_reviews_\d+$'))
+    application.add_handler(CallbackQueryHandler(instructor_reviews.start_rate_instructor_callback, pattern=r'^start_rate_\d+$'))
+    application.add_handler(CallbackQueryHandler(instructor_reviews.rate_instructor_callback, pattern=r'^rate_instructor_\d+_\d+$'))
+    application.add_handler(CommandHandler("skip", instructor_reviews.skip_review_text_command))
+
+    # Message handler for review text (add with lower priority)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, instructor_reviews.handle_review_text_message))
+
+    # Instructor management conversation
+    instructor_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_instructor_management.start_add_instructor, pattern='^admin_add_instructor$')],
+        states={
+            admin_instructor_management.INSTRUCTOR_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_instructor_management.receive_instructor_name)
+            ],
+            admin_instructor_management.INSTRUCTOR_SPECIALIZATION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_instructor_management.receive_instructor_specialization)
+            ],
+            admin_instructor_management.INSTRUCTOR_BIO: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_instructor_management.receive_instructor_bio)
+            ],
+            admin_instructor_management.INSTRUCTOR_EMAIL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_instructor_management.receive_instructor_email)
+            ],
+            admin_instructor_management.INSTRUCTOR_PHONE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_instructor_management.receive_instructor_phone)
+            ],
+        },
+        fallbacks=[CommandHandler('cancel', admin_instructor_management.cancel_add_instructor)],
+        name="instructor_management",
+        persistent=False
+    )
+
+    application.add_handler(instructor_conv)
+
+    # Instructor management menu handlers
+    application.add_handler(CallbackQueryHandler(admin_instructor_management.manage_instructors_menu, pattern='^admin_manage_instructors$'))
+    application.add_handler(CallbackQueryHandler(admin_instructor_management.view_instructors_callback, pattern='^admin_view_instructors$'))
+    application.add_handler(CallbackQueryHandler(admin_instructor_management.edit_instructor_callback, pattern='^admin_edit_instructor_\d+$'))
+    application.add_handler(CallbackQueryHandler(admin_instructor_management.toggle_instructor_status, pattern='^admin_toggle_instructor_\d+$'))
+
+    # Student review instructor command
+    application.add_handler(CommandHandler("review_instructor", instructor_reviews.review_instructor_command))    
+    
     # ==========================
     # ERROR HANDLER
     # ==========================

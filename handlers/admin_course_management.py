@@ -11,10 +11,10 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Conversation states
-(COURSE_NAME, COURSE_DESCRIPTION, COURSE_PRICE, COURSE_CERTIFICATE_PRICE,  # ← ADD THIS
+(COURSE_NAME, COURSE_DESCRIPTION, COURSE_PRICE, COURSE_CERTIFICATE_PRICE,
 COURSE_GROUP_LINK, COURSE_MAX_STUDENTS, COURSE_START_DATE, COURSE_END_DATE,
-COURSE_REG_OPEN_DATE, COURSE_REG_CLOSE_DATE, COURSE_CONFIRM,
-EDIT_SELECT_COURSE, EDIT_SELECT_FIELD, EDIT_INPUT_VALUE) = range(14)
+COURSE_REG_OPEN_DATE, COURSE_REG_CLOSE_DATE, INSTRUCTOR_SELECT, COURSE_CONFIRM,  # ← ADD INSTRUCTOR_SELECT
+EDIT_SELECT_COURSE, EDIT_SELECT_FIELD, EDIT_INPUT_VALUE) = range(15) 
 
 # ==================== /addcourse COMMAND ====================
 
@@ -335,29 +335,35 @@ async def course_reg_close_date_input(update: Update, context: ContextTypes.DEFA
     end_date_str = course_data.get('end_date').strftime('%Y-%m-%d') if course_data.get('end_date') else 'لا يوجد / None'
     reg_open_str = course_data.get('registration_open_date').strftime('%Y-%m-%d') if course_data.get('registration_open_date') else 'لا يوجد / None'
     reg_close_str = course_data.get('registration_close_date').strftime('%Y-%m-%d') if course_data.get('registration_close_date') else 'لا يوجد / None'
-    
+    instructor_name = "بدون مدرب / No Instructor"
+    if course_data.get('instructor_id'):
+        with get_db() as session:
+            instructor = crud.get_instructor_by_id(session, course_data['instructor_id'])
+            if instructor:
+                instructor_name = instructor.name
+
     summary = f"""
-📋 ملخص الكورس / Course Summary
+    📋 ملخص الكورس / Course Summary
 
-📌 الاسم / Name: {course_data['name']}
-📝 الوصف / Description:
-{course_data['description'][:200]}{'...' if len(course_data['description']) > 200 else ''}
+    📌 الاسم / Name: {course_data['name']}
+    👨‍🏫 المدرب / Instructor: {instructor_name}
+    📝 الوصف / Description:
+    {course_data['description'][:200]}{'...' if len(course_data['description']) > 200 else ''}
 
-💰 السعر / Price: {course_data['price']:.2f} 
-💰 [translate:السعر] / Price: {course_data['price']:.2f} SDG
-📜 [translate:سعر الشهادة] / Certificate Price: {course_data.get('certificate_price', 0):.2f} SDG
-🔗 رابط المجموعة / Group Link: {course_data.get('group_link') or 'لا يوجد / None'}
-👥 العدد الأقصى / Max Students: {course_data.get('max_students') or 'غير محدود / Unlimited'}
+    💰 السعر / Price: {course_data['price']:.2f} SDG
+    📜 سعر الشهادة / Certificate Price: {course_data.get('certificate_price', 0):.2f} SDG
+    🔗 رابط المجموعة / Group Link: {course_data.get('group_link') or 'لا يوجد / None'}
+    👥 العدد الأقصى / Max Students: {course_data.get('max_students') or 'غير محدود / Unlimited'}
 
-📅 تاريخ بداية الكورس / Course Start Date: {start_date_str}
-📅 تاريخ نهاية الكورس / Course End Date: {end_date_str}
+    📅 تاريخ بداية الكورس / Course Start Date: {start_date_str}
+    📅 تاريخ نهاية الكورس / Course End Date: {end_date_str}
 
-🟢 تاريخ فتح التسجيل / Registration Opens: {reg_open_str}
-🔴 تاريخ إغلاق التسجيل / Registration Closes: {reg_close_str}
+    🟢 تاريخ فتح التسجيل / Registration Opens: {reg_open_str}
+    🔴 تاريخ إغلاق التسجيل / Registration Closes: {reg_close_str}
 
-هل تريد حفظ هذا الكورس؟
-Do you want to save this course?
-"""
+    هل تريد حفظ هذا الكورس؟
+    Do you want to save this course?
+    """
     
     keyboard = InlineKeyboardMarkup([
         [
@@ -391,24 +397,34 @@ async def course_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
                 course_name=course_data['name'],
                 description=course_data['description'],
                 price=course_data['price'],
-                certificate_price=course_data.get('certificate_price', 0),  # ← ADD
-                certificate_available=course_data.get('certificate_available', False), 
+                certificate_price=course_data.get('certificate_price', 0),
+                certificate_available=course_data.get('certificate_available', False),
                 telegram_group_link=course_data.get('group_link'),
                 max_students=course_data.get('max_students'),
                 start_date=course_data.get('start_date'),
                 end_date=course_data.get('end_date'),
                 registration_open_date=course_data.get('registration_open_date'),
-                registration_close_date=course_data.get('registration_close_date')
+                registration_close_date=course_data.get('registration_close_date'),
+                instructor_id=course_data.get('instructor_id')  # ← ADD THIS
             )
 
             session.commit()
+            
+            # Get instructor name for confirmation message
+            instructor_name = "بدون مدرب / No Instructor"
+            if new_course.instructor_id:
+                instructor = crud.get_instructor_by_id(session, new_course.instructor_id)
+                if instructor:
+                    instructor_name = instructor.name
             
             logger.info(f"Admin {update.effective_user.id} created course: {new_course.course_id} - {new_course.course_name}")
             
             await query.edit_message_text(
                 f"✅ **Course Created Successfully!**\n\n"
                 f"📚 **{new_course.course_name}**\n"
+                f"👨‍🏫 المدرب / Instructor: {instructor_name}\n"
                 f"💰 Price: {new_course.price:.2f} SDG\n"
+                f"📜 Certificate: {new_course.certificate_price:.2f} SDG\n"
                 f"🆔 Course ID: {new_course.course_id}\n\n"
                 f"The course is now **active** and visible to students.",
                 parse_mode='Markdown',
@@ -524,16 +540,17 @@ async def edit_select_course_callback(update: Update, context: ContextTypes.DEFA
         [InlineKeyboardButton("📝 الاسم / Name", callback_data="edit_field_name")],
         [InlineKeyboardButton("📄 الوصف / Description", callback_data="edit_field_description")],
         [InlineKeyboardButton("💰 السعر / Price", callback_data="edit_field_price")],
+        [InlineKeyboardButton("📜 سعر الشهادة / Certificate Price", callback_data="edit_field_cert_price")],
+        [InlineKeyboardButton("👨‍🏫 المدرب / Instructor", callback_data="edit_field_instructor")],  # ← ADD THIS
         [InlineKeyboardButton("🔗 رابط المجموعة / Group Link", callback_data="edit_field_group")],
         [InlineKeyboardButton("👥 العدد الأقصى / Max Students", callback_data="edit_field_max")],
         [InlineKeyboardButton("📅 تاريخ البداية / Start Date", callback_data="edit_field_start")],
         [InlineKeyboardButton("📅 تاريخ النهاية / End Date", callback_data="edit_field_end")],
         [InlineKeyboardButton("🟢 تاريخ فتح التسجيل / Reg Open", callback_data="edit_field_reg_open")],
         [InlineKeyboardButton("🔴 تاريخ إغلاق التسجيل / Reg Close", callback_data="edit_field_reg_close")],
-        [InlineKeyboardButton("❌ إلغاء", callback_data="edit_cancel")]
+        [InlineKeyboardButton("❌ إلغاء", callback_data="cancel_edit")]
     ]
 
-    
     await query.edit_message_text(
         f"✏️ **تعديل الكورس / Edit Course #{course_id}**\n\n"
         f"اختر الحقل الذي تريد تعديله:\n"
@@ -543,6 +560,7 @@ async def edit_select_course_callback(update: Update, context: ContextTypes.DEFA
     )
     
     return EDIT_SELECT_FIELD
+
 
 async def edit_select_field_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle field selection for editing"""
@@ -557,10 +575,45 @@ async def edit_select_field_callback(update: Update, context: ContextTypes.DEFAU
     field = '_'.join(query.data.split('_')[2:])
     context.user_data['edit_field'] = field
     
+    # Special handling for instructor selection
+    if field == "instructor":
+        course_id = context.user_data.get('edit_course_id')
+        
+        with get_db() as session:
+            instructors = crud.get_all_instructors(session, active_only=True)
+            
+            if not instructors:
+                await query.edit_message_text("⚠️ لا يوجد مدربين نشطين.\nNo active instructors.")
+                return ConversationHandler.END
+            
+            keyboard = []
+            for instructor in instructors:
+                avg_rating = crud.get_instructor_average_rating(session, instructor.instructor_id)
+                rating_text = f" ({avg_rating}⭐)" if avg_rating else ""
+                
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"{instructor.name}{rating_text}",
+                        callback_data=f"edit_instructor_{course_id}_{instructor.instructor_id}"
+                    )
+                ])
+            
+            keyboard.append([InlineKeyboardButton("بدون مدرب | No Instructor", callback_data=f"edit_instructor_{course_id}_none")])
+            keyboard.append([InlineKeyboardButton("❌ إلغاء | Cancel", callback_data="cancel_edit")])
+            
+            await query.edit_message_text(
+                "👨‍🏫 **اختر المدرب الجديد:**\n**Choose new instructor:**",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+            
+            return EDIT_INPUT_VALUE
+    
     field_names = {
         'name': 'اسم الدورة / Course Name',
         'description': 'وصف الدورة / Description',
         'price': 'السعر / Price',
+        'cert_price': 'سعر الشهادة / Certificate Price',
         'group': 'رابط المجموعة / Group Link',
         'max': 'العدد الأقصى / Max Students',
         'start': 'تاريخ البداية / Start Date',
@@ -577,6 +630,7 @@ async def edit_select_field_callback(update: Update, context: ContextTypes.DEFAU
     )
     
     return EDIT_INPUT_VALUE
+
 
 async def edit_input_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Receive new value for field"""
@@ -858,32 +912,175 @@ async def toggle_course_callback(update: Update, context: ContextTypes.DEFAULT_T
         )
 
 async def course_certificate_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Receive certificate price"""
+    """Receive certificate price and move to instructor selection"""
     try:
         certificate_price = float(update.message.text.strip())
         
         if certificate_price < 0:
-            await update.message.reply_text("[translate:❌ السعر يجب أن يكون 0 أو أكثر.]\nPrice must be 0 or more.")
+            await update.message.reply_text("❌ السعر يجب أن يكون 0 أو أكثر.\nPrice must be 0 or more.")
             return COURSE_CERTIFICATE_PRICE
         
         context.user_data['new_course']['certificate_price'] = certificate_price
         context.user_data['new_course']['certificate_available'] = certificate_price > 0
-        context.user_data['new_course']['group_link'] = None  # Skip group link
         
-        cert_status = "[translate:✅ متاحة]" if certificate_price > 0 else "[translate:❌ غير متاحة]"
+        cert_status = "✅ متاحة" if certificate_price > 0 else "❌ غير متاحة"
         
-        # Now continue to MAX STUDENTS
         await update.message.reply_text(
-            f"✅ [translate:سعر الشهادة:] {certificate_price:.2f} SDG ({cert_status})\n\n"
-            f"[translate:الآن أدخل العدد الأقصى للطلاب (أو أرسل 0 لعدد غير محدود):]\n"
-            f"Now enter the maximum number of students (or send 0 for unlimited):\n\n"
-            f"[translate:مثال] / Example: 50\n\n"
-            f"Send /cancel to abort.",
+            f"✅ سعر الشهادة: {certificate_price:.2f} SDG ({cert_status})\n\n"
+            f"الآن اختر المدرب للدورة...\n"
+            f"Now choose the instructor for the course...",
             parse_mode='Markdown'
         )
         
-        return COURSE_MAX_STUDENTS
+        # Show instructor selection
+        return await select_course_instructor(update, context)
+    
+    except ValueError:
+        await update.message.reply_text("❌ السعر غير صالح. أدخل رقماً.\nInvalid price. Please enter a number.")
+        return COURSE_CERTIFICATE_PRICE
+
     
     except ValueError:
         await update.message.reply_text("[translate:❌ السعر غير صالح. أدخل رقماً.]\nInvalid price. Please enter a number.")
         return COURSE_CERTIFICATE_PRICE
+
+async def select_course_instructor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show instructor selection menu"""
+    
+    with get_db() as session:
+        instructors = crud.get_all_instructors(session, active_only=True)
+        
+        if not instructors:
+            # No instructors - skip to max students
+            context.user_data['new_course']['instructor_id'] = None
+            context.user_data['new_course']['group_link'] = None
+            
+            await update.message.reply_text(
+                "⚠️ لا يوجد مدربين نشطين. سيتم إنشاء الدورة بدون مدرب.\n"
+                "No active instructors. Course will be created without instructor.\n\n"
+                "الآن أدخل العدد الأقصى للطلاب (أو أرسل 0 لعدد غير محدود):\n"
+                "Now enter the maximum number of students (or send 0 for unlimited):\n\n"
+                "مثال / Example: 50",
+                parse_mode='Markdown'
+            )
+            return COURSE_MAX_STUDENTS
+        
+        keyboard = []
+        message = "👨‍🏫 **اختر المدرب للدورة:**\n**Choose instructor for the course:**\n━━━━━━━━━━━━━━━━━━━━\n\n"
+        
+        for instructor in instructors:
+            avg_rating = crud.get_instructor_average_rating(session, instructor.instructor_id)
+            rating_text = f" ({avg_rating}⭐)" if avg_rating else ""
+            
+            message += f"• {instructor.name}{rating_text}\n  📚 {instructor.specialization or 'غير محدد'}\n\n"
+            
+            keyboard.append([
+                InlineKeyboardButton(
+                    instructor.name,
+                    callback_data=f"select_instructor_{instructor.instructor_id}"
+                )
+            ])
+        
+        keyboard.append([InlineKeyboardButton("بدون مدرب | No Instructor", callback_data="select_instructor_none")])
+        keyboard.append([InlineKeyboardButton("❌ إلغاء | Cancel", callback_data="cancel_add_course")])
+        
+        await update.message.reply_text(
+            message,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+    
+    return INSTRUCTOR_SELECT
+
+
+async def receive_instructor_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle instructor selection callback"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "cancel_add_course":
+        await query.edit_message_text("❌ تم إلغاء إضافة الكورس.\nCourse addition cancelled.")
+        context.user_data.pop('new_course', None)
+        return ConversationHandler.END
+    
+    if query.data == "select_instructor_none":
+        context.user_data['new_course']['instructor_id'] = None
+        await query.edit_message_text("✅ تم اختيار: بدون مدرب")
+    else:
+        instructor_id = int(query.data.split('_')[-1])
+        
+        with get_db() as session:
+            instructor = crud.get_instructor_by_id(session, instructor_id)
+            
+            if instructor:
+                context.user_data['new_course']['instructor_id'] = instructor_id
+                await query.edit_message_text(f"✅ تم اختيار المدرب: {instructor.name}")
+            else:
+                await query.edit_message_text("❌ المدرب غير موجود")
+                return INSTRUCTOR_SELECT
+    
+    # Skip group link (handled by group bot)
+    context.user_data['new_course']['group_link'] = None
+    
+    # Continue to max students
+    await query.message.reply_text(
+        "الآن أدخل العدد الأقصى للطلاب (أو أرسل 0 لعدد غير محدود):\n"
+        "Now enter the maximum number of students (or send 0 for unlimited):\n\n"
+        "مثال / Example: 50\n\n"
+        "Send /cancel to abort.",
+        parse_mode='Markdown'
+    )
+    
+    return COURSE_MAX_STUDENTS
+
+
+async def edit_instructor_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle instructor edit selection via callback"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Parse: edit_instructor_{course_id}_{instructor_id or 'none'}
+    parts = query.data.split('_')
+    course_id = int(parts[2])
+    instructor_selection = parts[3]
+    
+    try:
+        with get_db() as session:
+            course = crud.get_course_by_id(session, course_id)
+            
+            if not course:
+                await query.edit_message_text("❌ الكورس غير موجود.\nCourse not found.")
+                return ConversationHandler.END
+            
+            if instructor_selection == "none":
+                course.instructor_id = None
+                instructor_name = "بدون مدرب / No Instructor"
+            else:
+                instructor_id = int(instructor_selection)
+                instructor = crud.get_instructor_by_id(session, instructor_id)
+                
+                if not instructor:
+                    await query.edit_message_text("❌ المدرب غير موجود.\nInstructor not found.")
+                    return ConversationHandler.END
+                
+                course.instructor_id = instructor_id
+                instructor_name = instructor.name
+            
+            session.commit()
+            
+            logger.info(f"Admin {update.effective_user.id} changed course {course_id} instructor to: {instructor_name}")
+            
+            await query.edit_message_text(
+                f"✅ تم تحديث الكورس بنجاح!\n"
+                f"✅ Course Updated Successfully!\n\n"
+                f"🆔 Course ID: {course_id}\n"
+                f"👨‍🏫 المدرب الجديد / New Instructor: {instructor_name}"
+            )
+            
+    except Exception as e:
+        logger.error(f"Failed to update instructor: {e}")
+        await query.edit_message_text(f"❌ فشل التحديث.\nUpdate failed.\n\nError: {str(e)}")
+    
+    context.user_data.pop('edit_course_id', None)
+    context.user_data.pop('edit_field', None)
+    return ConversationHandler.END
