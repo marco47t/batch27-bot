@@ -249,6 +249,7 @@ async def course_dates_callback(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
 
+
 async def course_select_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle course selection - Add to cart"""
     query = update.callback_query
