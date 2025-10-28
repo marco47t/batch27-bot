@@ -246,3 +246,15 @@ def certificate_option_keyboard(course_id: int) -> InlineKeyboardMarkup:
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
+
+# ADD this NEW function to keyboards.py
+
+def course_info_buttons_keyboard(course_id: int) -> InlineKeyboardMarkup:
+    """Button menu for course details"""
+    keyboard = [
+        [InlineKeyboardButton("📋 الوصف | Description", callback_data=f"course_desc_{course_id}")],
+        [InlineKeyboardButton("📅 التواريخ | Dates", callback_data=f"course_dates_{course_id}")],
+        [InlineKeyboardButton("→ عودة لقائمة الدورات", callback_data="course_details_menu")],
+        [InlineKeyboardButton("→ العودة للقائمة الرئيسية", callback_data=CallbackPrefix.BACK_MAIN)]
+    ]
+    return InlineKeyboardMarkup(keyboard)

@@ -542,3 +542,98 @@ def payment_failed_message(reason: str = None) -> str:
 يمكنك إعادة المحاولة بإرسال صورة جديدة.
 """
     return base_message
+
+# ADD these 3 NEW functions to messages.py
+
+def course_summary_message(course, enrollment_count: int = 0) -> str:
+    """Brief course overview shown first"""
+    from datetime import datetime
+    
+    # Capacity info
+    capacity_text = ""
+    if course.max_students:
+        remaining = course.max_students - enrollment_count
+        capacity_text = f"\n👥 المسجلين: {enrollment_count}/{course.max_students}"
+        
+        if remaining <= 0:
+            capacity_text += "\n⚠️ الدورة ممتلئة"
+        elif remaining <= 5:
+            capacity_text += f"\n⚠️ فقط {remaining} مقاعد متبقية!"
+    
+    # Registration status
+    reg_status = ""
+    if course.registration_close_date and datetime.now() > course.registration_close_date:
+        reg_status = "\n🔴 التسجيل مغلق"
+    elif course.registration_open_date and datetime.now() < course.registration_open_date:
+        open_date = course.registration_open_date.strftime('%Y-%m-%d')
+        reg_status = f"\n🟡 التسجيل يفتح في: {open_date}"
+    else:
+        reg_status = "\n🟢 التسجيل مفتوح"
+    
+    return f"""📚 **{course.course_name}**
+
+💰 السعر: {course.price:.0f} جنيه سوداني{capacity_text}{reg_status}
+
+اضغط على الأزرار أدناه لعرض التفاصيل:
+Click buttons below to view details:
+"""
+
+
+def course_description_details(course) -> str:
+    """Show course description only"""
+    description = course.description or "لا يوجد وصف متاح\nNo description available"
+    
+    return f"""📋 **وصف الدورة**
+**Course Description**
+━━━━━━━━━━━━━━━━━━━━
+
+📚 {course.course_name}
+
+{description}
+
+💰 السعر: {course.price:.0f} جنيه سوداني
+"""
+
+
+def course_dates_details(course, enrollment_count: int = 0) -> str:
+    """Show course dates and schedule"""
+    from datetime import datetime
+    
+    # Registration dates
+    reg_info = ""
+    if course.registration_open_date or course.registration_close_date:
+        reg_info = "\n📅 **فترة التسجيل:**"
+        
+        if course.registration_open_date:
+            reg_info += f"\n🟢 يفتح: {course.registration_open_date.strftime('%Y-%m-%d')}"
+        
+        if course.registration_close_date:
+            reg_info += f"\n🔴 يغلق: {course.registration_close_date.strftime('%Y-%m-%d')}"
+    
+    # Course duration
+    course_info = ""
+    if course.start_date or course.end_date:
+        course_info = "\n\n📚 **مدة الدورة:**"
+        
+        if course.start_date:
+            course_info += f"\n▶️ البداية: {course.start_date.strftime('%Y-%m-%d')}"
+        
+        if course.end_date:
+            course_info += f"\n🏁 النهاية: {course.end_date.strftime('%Y-%m-%d')}"
+    
+    # Capacity
+    capacity = ""
+    if course.max_students:
+        remaining = course.max_students - enrollment_count
+        capacity = f"\n\n👥 المقاعد: {enrollment_count}/{course.max_students}"
+        if remaining <= 0:
+            capacity += " (ممتلئة)"
+        elif remaining <= 5:
+            capacity += f" ({remaining} متبقي)"
+    
+    return f"""📅 **التواريخ والجدول**
+**Dates & Schedule**
+━━━━━━━━━━━━━━━━━━━━
+
+📚 {course.course_name}{reg_info}{course_info}{capacity}
+"""

@@ -154,6 +154,101 @@ async def course_detail_callback(update: Update, context: ContextTypes.DEFAULT_T
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+async def course_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show BRIEF course summary with button menu (UPDATED)"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    course_id = int(query.data[len(CallbackPrefix.COURSE_DETAIL):])
+    
+    logger.info(f"User {user_id} viewing details for course {course_id}")
+    
+    with get_db() as session:
+        course = crud.get_course_by_id(session, course_id)
+        
+        if not course:
+            logger.warning(f"Course {course_id} not found for user {user_id}")
+            await query.edit_message_text(
+                error_message("course_not_found"),
+                reply_markup=back_to_main_keyboard()
+            )
+            return
+        
+        # Get enrollment count
+        enrollment_count = session.query(crud.Enrollment).filter(
+            crud.Enrollment.course_id == course.course_id,
+            crud.Enrollment.payment_status == PaymentStatus.VERIFIED
+        ).count()
+        
+        # Import the new functions
+        from utils.messages import course_summary_message
+        from utils.keyboards import course_info_buttons_keyboard
+        
+        # Show BRIEF summary instead of full details
+        await query.edit_message_text(
+            course_summary_message(course, enrollment_count),
+            reply_markup=course_info_buttons_keyboard(course_id),
+            parse_mode='Markdown'
+        )
+
+
+# ADD these 2 NEW handlers after course_detail_callback:
+
+async def course_description_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show course description details"""
+    query = update.callback_query
+    await query.answer()
+    
+    course_id = int(query.data.split('_')[-1])
+    
+    with get_db() as session:
+        course = crud.get_course_by_id(session, course_id)
+        
+        if not course:
+            await query.edit_message_text("❌ الدورة غير موجودة.")
+            return
+        
+        from utils.messages import course_description_details
+        from utils.keyboards import course_info_buttons_keyboard
+        
+        await query.edit_message_text(
+            course_description_details(course),
+            reply_markup=course_info_buttons_keyboard(course_id),
+            parse_mode='Markdown'
+        )
+
+
+async def course_dates_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show course dates and schedule"""
+    query = update.callback_query
+    await query.answer()
+    
+    course_id = int(query.data.split('_')[-1])
+    
+    with get_db() as session:
+        course = crud.get_course_by_id(session, course_id)
+        
+        if not course:
+            await query.edit_message_text("❌ الدورة غير موجودة.")
+            return
+        
+        # Get enrollment count
+        enrollment_count = session.query(crud.Enrollment).filter(
+            crud.Enrollment.course_id == course_id,
+            crud.Enrollment.payment_status == PaymentStatus.VERIFIED
+        ).count()
+        
+        from utils.messages import course_dates_details
+        from utils.keyboards import course_info_buttons_keyboard
+        
+        await query.edit_message_text(
+            course_dates_details(course, enrollment_count),
+            reply_markup=course_info_buttons_keyboard(course_id),
+            parse_mode='Markdown'
+        )
+
+
 async def course_select_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle course selection - Add to cart"""
     query = update.callback_query

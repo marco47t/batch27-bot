@@ -36,7 +36,7 @@ from handlers import (
     admin_reviews,
     admin_pending_registrations,
 )
-from handlers.course_handlers import handle_legal_name_during_registration
+from handlers.course_handlers import course_dates_callback, course_description_callback, handle_legal_name_during_registration
 from handlers.support_handlers import contact_admin_callback, contact_admin_command, handle_support_message
 from handlers.menu_handlers import contact_admin_callback, contact_admin_text_handler
 from database import crud, get_db, init_db
@@ -546,6 +546,11 @@ def main():
     # ==========================
     application.add_handler(ChatJoinRequestHandler(group_handlers.group_join_handler))
     
+
+    # Course detail button handlers
+    application.add_handler(CallbackQueryHandler(course_description_callback, pattern=r'^course_desc_\d+$'))
+    application.add_handler(CallbackQueryHandler(course_dates_callback, pattern=r'^course_dates_\d+$'))
+
     # ==========================
     # ERROR HANDLER
     # ==========================
