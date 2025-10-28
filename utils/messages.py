@@ -664,3 +664,45 @@ def instructor_reviews_message(course, reviews, avg_rating) -> str:
     
     return header + reviews_text
 
+
+def course_dates_details(course) -> str:
+    """Show course dates and timeline"""
+    from datetime import datetime
+    
+    # Format dates
+    start_date = course.start_date.strftime('%Y-%m-%d') if course.start_date else "غير محدد / Not set"
+    end_date = course.end_date.strftime('%Y-%m-%d') if course.end_date else "غير محدد / Not set"
+    reg_open = course.registration_open_date.strftime('%Y-%m-%d') if course.registration_open_date else "غير محدد / Not set"
+    reg_close = course.registration_close_date.strftime('%Y-%m-%d') if course.registration_close_date else "غير محدد / Not set"
+    
+    # Check registration status
+    now = datetime.utcnow()
+    reg_status = ""
+    
+    if course.registration_open_date and course.registration_close_date:
+        if now < course.registration_open_date:
+            reg_status = "🔴 التسجيل لم يفتح بعد / Registration not open yet"
+        elif now > course.registration_close_date:
+            reg_status = "🔴 التسجيل مغلق / Registration closed"
+        else:
+            reg_status = "🟢 التسجيل مفتوح / Registration open"
+    else:
+        reg_status = "🟡 لا توجد مواعيد محددة / No dates set"
+    
+    return f"""📅 **تواريخ الدورة**
+**Course Dates**
+━━━━━━━━━━━━━━━━━━━━
+
+📚 {course.course_name}
+
+**مواعيد الدورة:**
+🗓️ تاريخ البداية: {start_date}
+🗓️ تاريخ النهاية: {end_date}
+
+**مواعيد التسجيل:**
+🟢 فتح التسجيل: {reg_open}
+🔴 إغلاق التسجيل: {reg_close}
+
+**الحالة الحالية:**
+{reg_status}
+"""

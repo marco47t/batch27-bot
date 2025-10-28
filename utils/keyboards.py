@@ -181,13 +181,14 @@ def back_to_main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 # Admin keyboards remain in English for clarity
-def admin_menu_keyboard() -> InlineKeyboardMarkup:
-    """Admin menu keyboard"""
+def admin_menu_keyboard():
+    """Admin dashboard keyboard"""
     keyboard = [
-        [InlineKeyboardButton("1- View Statistics 📊", callback_data="admin_stats")],
-        [InlineKeyboardButton("2- Pending Transactions 📋", callback_data="admin_pending")],
-        [InlineKeyboardButton("3- Pending Registrations 💳", callback_data="admin_pending_registrations")],  # NEW
-        [InlineKeyboardButton("← Back to Main Menu", callback_data=CallbackPrefix.BACK_MAIN)]
+        [InlineKeyboardButton("📊 إحصائيات | Statistics", callback_data="admin_stats")],
+        [InlineKeyboardButton("⏳ المعاملات المعلقة | Pending Transactions", callback_data="admin_pending")],
+        [InlineKeyboardButton("📝 الطلبات المعلقة | Pending Registrations", callback_data="admin_pending_registrations")],
+        [InlineKeyboardButton("👨‍🏫 إدارة المدربين | Manage Instructors", callback_data="admin_manage_instructors")],  # ← ADD THIS LINE
+        [InlineKeyboardButton("🔙 عودة | Back to Main", callback_data="back_main")]
     ]
     return InlineKeyboardMarkup(keyboard)
 

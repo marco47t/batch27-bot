@@ -4,7 +4,6 @@
 from venv import logger
 import os
 import sys
-from database import admin_instructor_management, migrate_add_amount_paid
 from datetime import timedelta
 import logging
 from telegram import Update
@@ -35,6 +34,9 @@ from handlers import (
     student_reviews,
     admin_reviews,
     admin_pending_registrations,
+    admin_instructor_management,
+    instructor_reviews,
+    
 )
 from handlers.course_handlers import course_dates_callback, course_description_callback, handle_legal_name_during_registration
 from handlers.support_handlers import contact_admin_callback, contact_admin_command, handle_support_message
