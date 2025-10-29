@@ -706,3 +706,43 @@ def course_dates_details(course) -> str:
 **الحالة الحالية:**
 {reg_status}
 """
+
+def course_instructor_details(course, session) -> str:
+    """Show instructor info with ratings"""
+    if not course.instructor:
+        return """👨🏫 **معلومات المدرب**
+**Instructor Info**
+
+━━━━━━━━━━━━━━━━━━━━
+
+❌ لا يوجد مدرب مخصص لهذه الدورة
+No instructor assigned to this course
+"""
+    
+    from database import crud
+    instructor = course.instructor
+    avg_rating = crud.get_instructor_average_rating(session, instructor.instructor_id)
+    review_count = len(crud.get_instructor_reviews(session, instructor.instructor_id))
+    
+    rating_display = ""
+    if avg_rating:
+        stars = "⭐" * int(avg_rating)
+        rating_display = f"{stars} {avg_rating}/5 ({review_count} تقييم)"
+    else:
+        rating_display = "لا توجد تقييمات بعد"
+    
+    return f"""👨🏫 **معلومات المدرب**
+**Instructor Info**
+
+━━━━━━━━━━━━━━━━━━━━
+
+**الاسم:** {instructor.name}
+
+📚 **التخصص:** {instructor.specialization or 'غير محدد'}
+
+⭐ **التقييم:** {rating_display}
+
+**نبذة:**
+{instructor.bio or 'لا توجد معلومات'}
+
+"""
