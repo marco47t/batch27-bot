@@ -445,34 +445,25 @@ def payment_instructions_message(amount: float) -> str:
         )
     
     return f"""💳 تعليمات الدفع
-**Payment Instructions**
 
 ━━━━━━━━━━━━━━━━━━━━
-
 💰 المبلغ المطلوب: **{amount:.0f} جنيه سوداني (SDG)**
-💰 Required Amount: **{amount:.0f} SDG**
-
 ━━━━━━━━━━━━━━━━━━━━
 
 {accounts_text}
 
 👤 الاسم: {config.EXPECTED_ACCOUNT_NAME}
-👤 Name: {config.EXPECTED_ACCOUNT_NAME}
-
 ━━━━━━━━━━━━━━━━━━━━
 
 📸 **بعد إتمام الدفع:**
 ✓ أرسل صورة واضحة من إيصال التحويل
 ━━━━━━━━━━━━━━━━━━━━
-⚠️ **ملاحظات هامة / Important Notes:**
+⚠️ **ملاحظات هامة :**
 
 ✓ تأكد من وضوح جميع التفاصيل في الصورة
-
 ✓ يجب أن يظهر المبلغ: {amount:.0f} SDG
-
 ✓ يجب أن يتطابق رقم الحساب مع أحد الأرقام أعلاه
 ━━━━━━━━━━━━━━━━━━━━
-
 ✅ سيتم تأكيد تسجيلك فوراً بعد التحقق!
 """
 
