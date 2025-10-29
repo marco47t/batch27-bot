@@ -35,24 +35,29 @@ if not GEMINI_API_KEY:
 # Payment Configuration
 # Payment Configuration - Multiple Account Numbers Support
 # ✅ SUPPORTS MULTIPLE ACCOUNT NUMBERS (comma-separated in .env)
-BANK_ACCOUNT_NUMBERS = os.getenv('BANK_ACCOUNT_NUMBERS', '1234567890')
-EXPECTED_ACCOUNT_NAME = os.getenv('EXPECTED_ACCOUNT_NAME', 'School Account')
+BANKAK_ACCOUNT = os.getenv('BANKAK_ACCOUNT', '')
+CASHI_ACCOUNT = os.getenv('CASHI_ACCOUNT', '')
+FAWRY_ACCOUNT = os.getenv('FAWRY_ACCOUNT', '')
 
-# ✅ Parse multiple accounts into a list
-def get_expected_accounts():
-    """
-    Parse multiple account numbers from env variable
-    Supports formats like: xxxx163485xxxx (masked accounts in receipts)
-    Returns: list of account numbers
-    """
-    accounts_str = os.getenv('BANK_ACCOUNT_NUMBERS', '1234567890')
-    return [acc.strip() for acc in accounts_str.split(',') if acc.strip()]
+# Backward compatibility - default to Bankak
+EXPECTED_ACCOUNT_NUMBER = BANKAK_ACCOUNT
 
-# Global list of expected account numbers
-EXPECTED_ACCOUNTS = get_expected_accounts()
+# Multi-account validation array
+EXPECTED_ACCOUNTS = [acc for acc in [BANKAK_ACCOUNT, CASHI_ACCOUNT, FAWRY_ACCOUNT] if acc]
+
+# Account holder name
+EXPECTED_ACCOUNT_NAME = os.getenv('EXPECTED_ACCOUNT_NAME', 'الإدارة')
+
+# Bank names mapping (for display)
+BANK_NAMES = {
+    BANKAK_ACCOUNT: "بنكك",    # Bankak
+    CASHI_ACCOUNT: "كاشي",     # Cashi
+    FAWRY_ACCOUNT: "فوري"      # Fawry/Fori
+}
+
 
 # Legacy support (use first account for backward compatibility)
-EXPECTED_ACCOUNT_NUMBER = EXPECTED_ACCOUNTS[0] if EXPECTED_ACCOUNTS else '1234567890'
+EXPECTED_ACCOUNT_NUMBER = EXPECTED_ACCOUNTS[0]
 
 # Database Configuration
 DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///course_bot.db')
