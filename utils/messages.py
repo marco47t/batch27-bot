@@ -28,6 +28,7 @@ def welcome_message() -> str:
 def about_bot_message() -> str:
     """About the bot message"""
     return """
+    للتواصل عن طريق الواتساب : wa.me/249119182779
 ℹ️ **دليل استخدام البوت**
 
 ━━━━━━━━━━━━━━━━━━━━
@@ -422,34 +423,57 @@ def daily_summary_report_message(enrollments, date_str):
 
 
 def payment_instructions_message(amount: float) -> str:
-    """Payment instructions message - supports multiple account numbers"""
-    # ✅ NEW: Get all valid account numbers
-    valid_accounts = config.EXPECTED_ACCOUNTS if hasattr(config, 'EXPECTED_ACCOUNTS') else [config.EXPECTED_ACCOUNT_NUMBER]
+    """Payment instructions message - supports multiple account numbers with bank names"""
     
-    # ✅ NEW: Format account numbers for display
+    # Define account numbers with their bank names
+    # Format: (account_number, bank_name)
+    bank_accounts = [
+        (config.BANKAK_ACCOUNT, "بنكك"),      # Bankak
+        (config.CASHI_ACCOUNT, "كاشي"),       # Cashi  
+        (config.FAWRY_ACCOUNT, "فوري")        # Fawry/Fori
+    ]
+    
+    # Filter out None values (in case some accounts aren't configured)
+    valid_accounts = [(acc, name) for acc, name in bank_accounts if acc]
+    
+    # Build accounts display text
     if len(valid_accounts) == 1:
-        accounts_text = f"رقم الحساب: {valid_accounts[0]}"
+        accounts_text = f"🏦 {valid_accounts[0][1]}: `{valid_accounts[0][0]}`"
     else:
-        accounts_text = "أرقام الحسابات المقبولة:\n" + "\n".join([f"• {acc}" for acc in valid_accounts])
+        accounts_text = "🏦 أرقام الحسابات المقبولة:\n" + "\n".join(
+            [f"• {name}: `{acc}`" for acc, name in valid_accounts]
+        )
     
-    return f"""
-💳 تعليمات الدفع
+    return f"""💳 تعليمات الدفع
+**Payment Instructions**
 
-المبلغ المطلوب: {amount:.0f} جنيه سوداني (SDG)
+━━━━━━━━━━━━━━━━━━━━
 
-🏦 تفاصيل الحساب:
+💰 المبلغ المطلوب: **{amount:.0f} جنيه سوداني (SDG)**
+💰 Required Amount: **{amount:.0f} SDG**
+
+━━━━━━━━━━━━━━━━━━━━
+
 {accounts_text}
-الاسم : {config.EXPECTED_ACCOUNT_NAME}
 
-📸 بعد إتمام الدفع:
-أرسل صورة واضحة من إيصال التحويل
+👤 الاسم: {config.EXPECTED_ACCOUNT_NAME}
+👤 Name: {config.EXPECTED_ACCOUNT_NAME}
 
-⚠️ ملاحظات هامة:
+━━━━━━━━━━━━━━━━━━━━
+
+📸 **بعد إتمام الدفع:**
+✓ أرسل صورة واضحة من إيصال التحويل
+━━━━━━━━━━━━━━━━━━━━
+⚠️ **ملاحظات هامة / Important Notes:**
+
 ✓ تأكد من وضوح جميع التفاصيل في الصورة
-✓ يجب أن يظهر المبلغ: {amount:.0f} SDG
-✓ يجب أن يتطابق رقم الحساب مع أحد الأرقام المذكورة أعلاه
 
-سيتم تأكيد تسجيلك فوراً بعد التحقق!
+✓ يجب أن يظهر المبلغ: {amount:.0f} SDG
+
+✓ يجب أن يتطابق رقم الحساب مع أحد الأرقام أعلاه
+━━━━━━━━━━━━━━━━━━━━
+
+✅ سيتم تأكيد تسجيلك فوراً بعد التحقق!
 """
 
 

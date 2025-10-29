@@ -118,41 +118,6 @@ async def course_details_menu_callback(update: Update, context: ContextTypes.DEF
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-async def course_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show detailed information about a specific course"""
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    
-    course_id = int(query.data[len(CallbackPrefix.COURSE_DETAIL):])
-    logger.info(f"User {user_id} viewing details for course {course_id}")
-    
-    with get_db() as session:
-        course = crud.get_course_by_id(session, course_id)
-        
-        if not course:
-            logger.warning(f"Course {course_id} not found for user {user_id}")
-            await query.edit_message_text(
-                error_message("course_not_found"),
-                reply_markup=back_to_main_keyboard()
-            )
-            return
-        
-        # Get enrollment count
-        enrollment_count = session.query(crud.Enrollment).filter(
-            crud.Enrollment.course_id == course.course_id,
-            crud.Enrollment.payment_status == PaymentStatus.VERIFIED
-        ).count()
-    
-    keyboard = [
-        [InlineKeyboardButton("→ عودة لقائمة الدورات", callback_data="course_details_menu")],
-        [InlineKeyboardButton("→ العودة للقائمة الرئيسية", callback_data=CallbackPrefix.BACK_MAIN)]
-    ]
-    
-    await query.edit_message_text(
-        course_detail_message(course, enrollment_count),
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
 
 async def course_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show BRIEF course summary with button menu (UPDATED)"""
