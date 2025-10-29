@@ -46,6 +46,7 @@ import config
 from utils.logging_config import setup_cloudwatch_logging
 from handlers.payment_handlers import cancel_payment_callback
 from handlers import instructor_reviews
+from handlers.course_handlers import course_instructor_callback
 
 # Setup CloudWatch + Console logging with 3 separate log groups
 setup_cloudwatch_logging(aws_region='eu-north-1')  # Change to your AWS region
@@ -420,6 +421,9 @@ def main():
     application.add_handler(CallbackQueryHandler(admin_pending_registrations.admin_pending_registrations_callback, pattern="^admin_pending_registrations$"))  # NEW
     application.add_handler(CallbackQueryHandler(admin_pending_registrations.admin_refresh_pending_registrations_callback, pattern="^admin_refresh_pending_registrations$"))  # NEW
 
+
+    #
+    application.add_handler(CallbackQueryHandler(course_instructor_callback, pattern=r'^course_instructor_\d+$'))
 # ✨ NEW HANDLERS MUST COME FIRST (more specific patterns)
     application.add_handler(CallbackQueryHandler(
         admin_handlers.admin_approve_failed_callback,
