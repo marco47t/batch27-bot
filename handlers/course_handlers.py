@@ -212,14 +212,14 @@ async def course_description_callback(update: Update, context: ContextTypes.DEFA
         from utils.messages import course_description_details
         from utils.keyboards import course_info_buttons_keyboard
         
-        # Pass session to function
         message = course_description_details(course, session)
         
         await query.edit_message_text(
             message,
-            reply_markup=course_info_buttons_keyboard(course_id, has_instructor=bool(course.instructor)),
+            reply_markup=course_info_buttons_keyboard(course_id),
             parse_mode='Markdown'
         )
+
 
 
 
@@ -249,6 +249,48 @@ async def course_dates_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text(
             course_dates_details(course),
             reply_markup=course_info_buttons_keyboard(course_id),
+            parse_mode='Markdown'
+        )
+
+
+async def course_instructor_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show instructor details with ratings"""
+    query = update.callback_query
+    await query.answer()
+    
+    course_id = int(query.data.split('_')[-1])
+    
+    with get_db() as session:
+        course = crud.get_course_by_id(session, course_id)
+        
+        if not course:
+            await query.edit_message_text("❌ الدورة غير موجودة.")
+            return
+        
+        from utils.messages import course_instructor_details
+        from utils.keyboards import course_info_buttons_keyboard, review_instructor_keyboard
+        
+        message = course_instructor_details(course, session)
+        
+        # Build keyboard with rate button if instructor exists
+        keyboard_buttons = []
+        
+        if course.instructor:
+            # Add rate instructor button
+            keyboard_buttons.append([InlineKeyboardButton(
+                "⭐ قيّم المدرب | Rate Instructor", 
+                callback_data=f"start_rate_{course.instructor.instructor_id}"
+            )])
+        
+        # Add back buttons
+        keyboard_buttons.extend([
+            [InlineKeyboardButton("🔙 عودة | Back", callback_data=f"course_detail_{course_id}")],
+            [InlineKeyboardButton("→ العودة للقائمة الرئيسية", callback_data=CallbackPrefix.BACK_MAIN)]
+        ])
+        
+        await query.edit_message_text(
+            message,
+            reply_markup=InlineKeyboardMarkup(keyboard_buttons),
             parse_mode='Markdown'
         )
 

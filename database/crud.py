@@ -56,14 +56,14 @@ def get_all_active_courses(session: Session) -> List[Course]:
 def get_course_by_id(session: Session, course_id: int) -> Optional[Course]:
     return session.query(Course).filter(Course.course_id == course_id).first()
 
-def create_course(session: Session, course_name: str, description: str,
-                  price: float, telegram_group_link: str = None,
-                  telegram_group_id: int = None, max_students: int = None,
-                  start_date: datetime = None, end_date: datetime = None,
-                  registration_open_date: datetime = None,
-                  registration_close_date: datetime = None,
-                  certificate_price: float = 0,  # ✅ ADD THIS
-                  certificate_available: bool = False) -> Course:  # ✅ ADD THIS
+def create_course(session: Session, course_name: str, description: str, price: float,
+                 telegram_group_link: str = None, telegram_group_id: int = None,
+                 max_students: int = None, start_date: datetime = None,
+                 end_date: datetime = None, registration_open_date: datetime = None,
+                 registration_close_date: datetime = None,
+                 certificate_price: float = 0,
+                 certificate_available: bool = False,
+                 instructor_id: int = None) -> Course:  
     course = Course(
         course_name=course_name,
         description=description,
@@ -76,7 +76,8 @@ def create_course(session: Session, course_name: str, description: str,
         start_date=start_date,
         end_date=end_date,
         registration_open_date=registration_open_date,
-        registration_close_date=registration_close_date
+        registration_close_date=registration_close_date,
+        instructor_id=instructor_id
     )
     session.add(course)
     session.flush()
@@ -1023,10 +1024,9 @@ def get_instructor_courses(session, instructor_id: int):
 
 # ==================== INSTRUCTOR REVIEW CRUD ====================
 
-def create_instructor_review(session, instructor_id: int, user_id: int, rating: int, review_text: str = None):
-    """Create or update instructor review"""
+def create_instructor_review(session: Session, instructor_id: int, user_id: int, rating: int, review_text: str = None):
+    """Create instructor review - review_text is optional"""
     from database.models import InstructorReview
-    from datetime import datetime
     
     # Check if review already exists
     existing_review = session.query(InstructorReview).filter(
@@ -1038,9 +1038,7 @@ def create_instructor_review(session, instructor_id: int, user_id: int, rating: 
         # Update existing review
         existing_review.rating = rating
         existing_review.review_text = review_text
-        existing_review.updated_at = datetime.utcnow()
-        session.commit()
-        return existing_review
+        existing_review.created_at = datetime.utcnow()
     else:
         # Create new review
         review = InstructorReview(
@@ -1050,8 +1048,9 @@ def create_instructor_review(session, instructor_id: int, user_id: int, rating: 
             review_text=review_text
         )
         session.add(review)
-        session.commit()
-        return review
+    
+    session.flush()
+    return existing_review or review
 
 
 def get_instructor_reviews(session, instructor_id: int):

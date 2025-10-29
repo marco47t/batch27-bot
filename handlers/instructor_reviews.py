@@ -52,36 +52,49 @@ async def start_rate_instructor_callback(update: Update, context: ContextTypes.D
     query = update.callback_query
     await query.answer()
     
-    course_id = int(query.data.split('_')[-1])
+    instructor_id = int(query.data.split('_')[-1])
     
     await query.edit_message_text(
         "⭐ **قيّم المدرب**\n\nاختر تقييمك من 1 إلى 5 نجوم:\n\n**Rate the Instructor**\n\nSelect your rating from 1 to 5 stars:",
-        reply_markup=review_instructor_keyboard(course_id),
+        reply_markup=review_instructor_keyboard(instructor_id),
         parse_mode='Markdown'
     )
 
 
+
+
 async def rate_instructor_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle instructor rating selection"""
+    """Handle instructor rating selection - SUBMIT IMMEDIATELY"""
     query = update.callback_query
     await query.answer()
     
-    # Parse: rate_instructor_{course_id}_{rating}
+    # Parse: rate_instructor_{instructor_id}_{rating}
     parts = query.data.split('_')
-    course_id = int(parts[2])
+    instructor_id = int(parts[2])
     rating = int(parts[3])
-    
     telegram_user_id = query.from_user.id
     
-    # Store rating in context and ask for review text
-    context.user_data['pending_instructor_review'] = {
-        'course_id': course_id,
-        'rating': rating
-    }
-    
-    await query.edit_message_text(
-        f"✅ تقييمك: {'⭐' * rating}\n\nالآن، اكتب تعليقك عن المدرب (أو اضغط /skip للتخطي):\n\n**Your rating:** {'⭐' * rating}\n\nNow write your comment about the instructor (or /skip):"
-    )
+    with get_db() as session:
+        internal_user = crud.get_user_by_telegram_id(session, telegram_user_id)
+        
+        if not internal_user:
+            await query.edit_message_text("خطأ: المستخدم غير موجود")
+            return
+        
+        # Save rating WITHOUT comment - submit immediately
+        crud.create_instructor_review(
+            session,
+            instructor_id=instructor_id,
+            user_id=internal_user.user_id,
+            rating=rating,
+            review_text=None  # No comment
+        )
+        session.commit()
+        
+        await query.edit_message_text(
+            f"✅ شكراً لتقييمك! ({'⭐' * rating})\n\n✅ Thanks for your rating!"
+        )
+
 
 
 async def skip_review_text_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
