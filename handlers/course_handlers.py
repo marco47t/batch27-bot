@@ -247,7 +247,7 @@ async def course_dates_callback(update: Update, context: ContextTypes.DEFAULT_TY
         from utils.keyboards import course_info_buttons_keyboard
         
         await query.edit_message_text(
-            course_dates_details(course, enrollment_count),
+            course_dates_details(course),
             reply_markup=course_info_buttons_keyboard(course_id),
             parse_mode='Markdown'
         )
