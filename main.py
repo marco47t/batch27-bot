@@ -344,6 +344,10 @@ def main():
         pattern='course_details_menu'
     ))
     application.add_handler(CallbackQueryHandler(
+        course_handlers.course_details_menu_callback, 
+        pattern=r'^course_details_page_'
+    ))
+    application.add_handler(CallbackQueryHandler(
         course_handlers.view_cart_callback, 
         pattern='view_cart'
     ))
@@ -358,6 +362,10 @@ def main():
     application.add_handler(CallbackQueryHandler(
         course_handlers.course_selection_menu_callback, 
         pattern='course_selection_menu'
+    ))
+    application.add_handler(CallbackQueryHandler(
+        course_handlers.course_selection_menu_callback, 
+        pattern=r'^course_selection_page_'
     ))
     application.add_handler(CallbackQueryHandler(
         course_handlers.course_select_callback, 
