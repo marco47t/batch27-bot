@@ -51,7 +51,7 @@ def course_details_keyboard(courses: List, page: int = 0, per_page: int = 5) -> 
     keyboard.append([InlineKeyboardButton("→ عودة", callback_data=CallbackPrefix.BACK_COURSES)])
     return InlineKeyboardMarkup(keyboard)
 
-def course_selection_keyboard(courses: list, selected_course_ids: list, cart_total: float) -> InlineKeyboardMarkup:
+def course_selection_keyboard(courses: list, selected_course_ids: list, cart_total: float, page: int = 0, total_pages: int = 1) -> InlineKeyboardMarkup:
     """
     Dynamic keyboard for course selection with checkboxes
     Shows course name WITH PRICE, enrollment status, and cart total
@@ -78,6 +78,16 @@ def course_selection_keyboard(courses: list, selected_course_ids: list, cart_tot
         
         keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
     
+    # Pagination buttons
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("◀️ السابق", callback_data=f"course_selection_page_{page - 1}"))
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("التالي ▶️", callback_data=f"course_selection_page_{page + 1}"))
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+
     # Bottom action buttons
     action_buttons = []
     

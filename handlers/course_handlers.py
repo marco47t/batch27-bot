@@ -32,10 +32,14 @@ async def course_selection_menu_callback(update: Update, context: ContextTypes.D
     user = query.from_user
     telegram_user_id = user.id
     
-    logger.info(f"User {telegram_user_id} accessing course selection menu")
+    courses_per_page = 5
+    page = 0
+    if query.data.startswith('course_selection_page_'):
+        page = int(query.data.split('_')[-1])
+
+    logger.info(f"User {telegram_user_id} accessing course selection menu, page {page}")
     
     with get_db() as session:
-        # ENSURE USER EXISTS FIRST
         db_user = crud.get_or_create_user(
             session,
             telegram_user_id=user.id,
@@ -46,26 +50,18 @@ async def course_selection_menu_callback(update: Update, context: ContextTypes.D
         session.flush()
         session.commit()
         
-        # USE INTERNAL USER ID
         internal_user_id = db_user.user_id
-        logger.info(f"User {telegram_user_id} has internal ID: {internal_user_id}")
         
-        # Get ALL courses
         all_courses = crud.get_available_courses_for_registration(session)
-
-        
-        # Get user's enrollments (all statuses) - USE INTERNAL ID
         user_enrollments = crud.get_user_enrollments(session, internal_user_id)
         enrolled_course_ids = [e.course_id for e in user_enrollments]
         
-        # Filter out already enrolled courses
         available_courses = [c for c in all_courses if c.course_id not in enrolled_course_ids]
-        
-        # Get cart items - USE INTERNAL ID
+        available_courses.sort(key=lambda c: c.course_name)
+
         cart_items = crud.get_user_cart(session, internal_user_id)
         cart_course_ids = [item.course_id for item in cart_items]
         
-        # Get enrollment counts for capacity checking
         course_enrollment_counts = {}
         for course in available_courses:
             enrollment_count = session.query(crud.Enrollment).filter(
@@ -80,42 +76,54 @@ async def course_selection_menu_callback(update: Update, context: ContextTypes.D
             reply_markup=back_to_main_keyboard()
         )
         return
-    
-    logger.info(f"Showing {len(available_courses)} available courses for user {telegram_user_id} (cart has {len(cart_items)} items)")
-    
+
+    total_pages = (len(available_courses) + courses_per_page - 1) // courses_per_page
+    start = page * courses_per_page
+    end = start + courses_per_page
+    paginated_courses = available_courses[start:end]
+
     cart_totals = crud.calculate_cart_total(session, internal_user_id)
     cart_total = cart_totals['total']
+    
     await query.edit_message_text(
-        course_list_message(available_courses, course_enrollment_counts),
-        reply_markup=course_selection_keyboard(available_courses, cart_course_ids, cart_total)
+        course_list_message(paginated_courses, course_enrollment_counts),
+        reply_markup=course_selection_keyboard(
+            paginated_courses, 
+            cart_course_ids, 
+            cart_total,
+            page=page,
+            total_pages=total_pages
+        )
     )
 
 
 
 async def course_details_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show course details menu"""
+    """Show course details menu with pagination"""
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
-    
-    logger.info(f"User {user_id} accessing course details menu")
-    
+
+    # Determine page number
+    page = 0
+    if query.data.startswith('course_details_page_'):
+        page = int(query.data.split('_')[-1])
+
+    logger.info(f"User {user_id} accessing course details menu, page {page}")
+
     with get_db() as session:
         courses = crud.get_all_courses(session)
     
-    keyboard = []
-    for course in courses:
-        keyboard.append([
-            InlineKeyboardButton(
-                f"📖 {course.course_name}", 
-                callback_data=f"{CallbackPrefix.COURSE_DETAIL}{course.course_id}"
-            )
-        ])
-    keyboard.append([InlineKeyboardButton("→ عودة", callback_data=CallbackPrefix.BACK_COURSES)])
-    
+    # Sort courses alphabetically
+    courses.sort(key=lambda c: c.course_name)
+
+    # Use the existing paginated keyboard
+    from utils.keyboards import course_details_keyboard
+    paginated_keyboard = course_details_keyboard(courses, page=page)
+
     await query.edit_message_text(
         "📚 اختر دورة لعرض التفاصيل:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        reply_markup=paginated_keyboard
     )
 
 
