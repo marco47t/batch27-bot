@@ -253,6 +253,7 @@ def certificate_option_keyboard(course_id: int) -> InlineKeyboardMarkup:
 def course_info_buttons_keyboard(course_id: int) -> InlineKeyboardMarkup:
     """Button menu for course details - ALWAYS show all buttons"""
     keyboard = [
+        [InlineKeyboardButton("✍️ التسجيل في الدورة | Register", callback_data=f"register_course_{course_id}")],
         [InlineKeyboardButton("📋 الوصف | Description", callback_data=f"course_desc_{course_id}")],
         [InlineKeyboardButton("👨🏫 المدرب | Instructor", callback_data=f"course_instructor_{course_id}")],
         [InlineKeyboardButton("📅 التواريخ | Dates", callback_data=f"course_dates_{course_id}")],

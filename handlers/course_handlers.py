@@ -260,6 +260,69 @@ async def course_instructor_callback(update: Update, context: ContextTypes.DEFAU
         )
 
 
+async def register_course_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle registration from the course details view."""
+    query = update.callback_query
+    await query.answer()
+
+    user = query.from_user
+    telegram_user_id = user.id
+    course_id = int(query.data.split('_')[-1])
+
+    logger.info(f"User {telegram_user_id} attempting to register for course {course_id} from details view")
+
+    with get_db() as session:
+        db_user = crud.get_or_create_user(
+            session,
+            telegram_user_id=user.id,
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name
+        )
+        session.flush()
+        session.commit()
+        session.refresh(db_user)
+
+        internal_user_id = db_user.user_id
+        course = crud.get_course_by_id(session, course_id)
+
+        if not course:
+            await query.edit_message_text("❌ الدورة غير موجودة.")
+            return
+
+        if crud.is_user_enrolled(session, internal_user_id, course_id):
+            await query.answer("⚠️ أنت مسجل بالفعل في هذه الدورة!", show_alert=True)
+            return
+
+        if course.certificate_available and course.certificate_price > 0:
+            message = f"""
+            📚 <b>{course.course_name}</b>
+    
+            💰 سعر الدورة: {course.price:.0f} SDG
+            📜 سعر الشهادة: {course.certificate_price:.0f} SDG
+    
+            هل تريد التسجيل مع شهادة؟
+            Do you want to register with a certificate?
+            """
+            await query.edit_message_text(
+                message,
+                reply_markup=certificate_option_keyboard(course_id),
+                parse_mode='HTML'
+            )
+            return
+        else:
+            # No certificate, proceed directly to payment
+            payment_amount = course.price
+            enrollment = crud.create_enrollment(session, internal_user_id, course.course_id, payment_amount)
+            session.commit()
+
+            context.user_data['cart_total_for_payment'] = payment_amount
+            context.user_data['pending_enrollment_ids_for_payment'] = [enrollment.enrollment_id]
+
+            from handlers.payment_handlers import proceed_to_payment_callback
+            await proceed_to_payment_callback(update, context)
+
+
 
 async def course_select_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle course selection - Add to cart"""

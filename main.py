@@ -352,6 +352,10 @@ def main():
         pattern=r'^course_detail_'
     ))
     application.add_handler(CallbackQueryHandler(
+        course_handlers.register_course_callback, 
+        pattern=r'^register_course_'
+    ))
+    application.add_handler(CallbackQueryHandler(
         course_handlers.course_selection_menu_callback, 
         pattern='course_selection_menu'
     ))
