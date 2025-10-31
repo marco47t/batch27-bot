@@ -546,6 +546,11 @@ def main():
         pattern="^cert_(yes|no)_"
     ))
 
+    application.add_handler(CallbackQueryHandler(
+        course_handlers.register_certificate_choice_callback, 
+        pattern="^register_cert_(yes|no)_"
+    ))
+
     # GROUP REGISTRATION COMMAND
     # ==========================
     application.add_handler(CommandHandler("register_group", group_registration.register_group_command))

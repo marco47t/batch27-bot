@@ -314,7 +314,7 @@ async def register_course_callback(update: Update, context: ContextTypes.DEFAULT
             """
             await query.edit_message_text(
                 message,
-                reply_markup=certificate_option_keyboard(course_id),
+                reply_markup=certificate_option_keyboard(course_id, register_flow=True),
                 parse_mode='HTML'
             )
             return
@@ -322,10 +322,13 @@ async def register_course_callback(update: Update, context: ContextTypes.DEFAULT
             # No certificate, proceed directly to payment
             payment_amount = course.price
             enrollment = crud.create_enrollment(session, internal_user_id, course.course_id, payment_amount)
+            enrollment.with_certificate = False # Explicitly set to False
             session.commit()
 
             context.user_data['cart_total_for_payment'] = payment_amount
             context.user_data['pending_enrollment_ids_for_payment'] = [enrollment.enrollment_id]
+            context.user_data['awaiting_receipt_upload'] = True
+            context.user_data['expected_amount_for_gemini'] = payment_amount
 
             from handlers.payment_handlers import proceed_to_payment_callback
             await proceed_to_payment_callback(update, context)
@@ -974,6 +977,51 @@ Do you want to register with a certificate?
                 f"✅ تمت إضافة {course.course_name} إلى السلة\n\nAdded to cart!",
                 reply_markup=course_selection_keyboard()
             )
+
+
+async def register_certificate_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle certificate yes/no choice when registering directly from course details"""
+    query = update.callback_query
+    await query.answer()
+    
+    telegram_user_id = query.from_user.id
+    callback_data = query.data  # register_cert_yes_123 or register_cert_no_123
+    
+    with_certificate = callback_data.startswith('register_cert_yes')
+    course_id = int(callback_data.split('_')[-1])
+    
+    logger.info(f"User {telegram_user_id} chose certificate option for course {course_id} (direct registration flow): {with_certificate}")
+    
+    with get_db() as session:
+        user = crud.get_or_create_user(session, telegram_user_id)
+        internal_user_id = user.user_id
+        
+        course = session.query(Course).filter(Course.course_id == course_id).first()
+        
+        if not course:
+            await query.edit_message_text("❌ الدورة غير موجودة")
+            return
+        
+        # Create pending enrollment directly
+        payment_amount = course.price
+        if with_certificate:
+            payment_amount += course.certificate_price
+        
+        enrollment = crud.create_enrollment(session, internal_user_id, course_id, payment_amount)
+        enrollment.with_certificate = with_certificate
+        session.commit()
+        
+        logger.info(f"Created pending enrollment {enrollment.enrollment_id} for user {telegram_user_id}, amount: {payment_amount}, with_cert: {with_certificate}")
+        
+        # Set context for payment flow
+        context.user_data['cart_total_for_payment'] = payment_amount
+        context.user_data['pending_enrollment_ids_for_payment'] = [enrollment.enrollment_id]
+        context.user_data['awaiting_receipt_upload'] = True
+        context.user_data['expected_amount_for_gemini'] = payment_amount
+        
+        # Proceed to payment
+        from handlers.payment_handlers import proceed_to_payment_callback
+        await proceed_to_payment_callback(update, context)
 
 
 async def certificate_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
