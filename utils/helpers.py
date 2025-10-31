@@ -83,7 +83,7 @@ def safe_int_conversion(value: str) -> Optional[int]:
         return int(value)
     except (ValueError, TypeError):
         return None
-
+ 
 def truncate_text(text: str, max_length: int = 100) -> str:
     """Truncate text to specified length"""
     if len(text) <= max_length:
