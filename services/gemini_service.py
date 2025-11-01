@@ -13,6 +13,8 @@ from PIL import Image
 import config
 import asyncio
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,57 @@ logger = logging.getLogger(__name__)
 genai.configure(api_key=config.GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-2.5-flash')
 
+GEMINI_THREAD_POOL = ThreadPoolExecutor(
+    max_workers=10,
+    thread_name_prefix="GeminiWorker"
+)
+
+# Track active processing per user (optional - for monitoring)
+_active_users = {}
+_active_users_lock = threading.Lock()
+
+def _track_user_start(user_id: int):
+    """Track when a user starts Gemini processing"""
+    with _active_users_lock:
+        _active_users[user_id] = threading.current_thread().name
+        logger.info(f"👤 User {user_id} started Gemini processing on thread {threading.current_thread().name}")
+        logger.info(f"📊 Active users processing: {len(_active_users)}")
+
+def _track_user_end(user_id: int):
+    """Track when a user finishes Gemini processing"""
+    with _active_users_lock:
+        if user_id in _active_users:
+            thread_name = _active_users.pop(user_id)
+            logger.info(f"✅ User {user_id} completed Gemini processing on thread {thread_name}")
+            logger.info(f"📊 Active users processing: {len(_active_users)}")
+
+def _process_gemini_sync(image_path: str, prompt: str, user_id: int = None) -> str:
+    """
+    Synchronous Gemini processing function that runs in a dedicated thread
+    This is the actual blocking I/O operation
+    
+    Args:
+        image_path: Path to receipt image
+        prompt: Gemini prompt
+        user_id: Optional user ID for tracking
+    
+    Returns:
+        Response text from Gemini
+    """
+    try:
+        if user_id:
+            _track_user_start(user_id)
+        
+        logger.debug(f"🧵 Thread {threading.current_thread().name} processing Gemini request")
+        image = Image.open(image_path)
+        
+        # This is the blocking call that runs in its own thread
+        response = model.generate_content([prompt, image])
+        
+        return response.text.strip()
+    finally:
+        if user_id:
+            _track_user_end(user_id)
 
 def match_account_number(extracted_account: str, expected_accounts: list) -> tuple:
     """
@@ -110,9 +163,11 @@ def match_account_number(extracted_account: str, expected_accounts: list) -> tup
 async def validate_receipt_with_gemini_ai(
     image_path: str,
     expected_amount: float,
-    expected_accounts: list,  # ✅ NOW ACCEPTS LIST
-    max_retries: int = 1
+    expected_accounts: list,
+    max_retries: int = 1,
+    user_id: int = None  # ✅ NEW: Optional user_id for tracking
 ) -> Dict[str, Any]:
+
     """
     Validate receipt with OLD receipt detection and multilingual field extraction
     
@@ -260,13 +315,19 @@ Return ONLY the JSON object.
             # thread, which prevents it from blocking the main asyncio event loop.
             # This is the recommended way to run blocking I/O operations in an
             # asyncio application.
+            logger.info(f"🚀 Submitting Gemini task to thread pool for user {user_id or 'unknown'}")
             loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,  # Use default ThreadPoolExecutor
-                lambda: model.generate_content([prompt, image])
+
+            # Each user gets their own thread from the pool
+            response_text = await loop.run_in_executor(
+                GEMINI_THREAD_POOL,  # ✅ Use dedicated thread pool
+                _process_gemini_sync,  # Function to run
+                image_path,
+                prompt,
+                user_id  # Pass user_id for tracking
             )
 
-            response_text = response.text.strip()
+            logger.info(f"✅ Gemini response received for user {user_id or 'unknown'}")
             
             # Clean response
             if response_text.startswith("```json"):

@@ -133,10 +133,11 @@ async def _process_receipt_async(update: Update, context: ContextTypes.DEFAULT_T
 
         # Run Gemini validation in a separate thread to avoid blocking other users
         # This is the ONLY blocking operation that runs in a thread
-        gemini_result = await run_gemini_in_thread(
+        gemini_result = await validate_receipt_with_gemini_ai(
             temp_path,
             expected_amount_for_gemini,
-            config.EXPECTED_ACCOUNTS
+            config.BANK_ACCOUNT_NUMBERS,
+            user_id=telegram_user_id  # ✅ NEW: Enable per-user threading
         )
         transaction_id = gemini_result.get('transaction_id')
         logger.info(f"🔍 DUPLICATE CHECK - Transaction ID extracted: '{transaction_id}' (type: {type(transaction_id)})")
