@@ -890,35 +890,32 @@ ID: <code>{telegram_user_id}</code>
                     enrollment_remaining = item['remaining']
                     
                     # Calculate proportional amount
-                    if idx == len(enrollment_remaining_balances) - 1:
-                        amount_for_this_enrollment = remaining_to_distribute
-                    else:
-                        proportion = enrollment_remaining / total_remaining_needed
-                        amount_for_this_enrollment = extracted_amount * proportion
-                        remaining_to_distribute -= amount_for_this_enrollment
-                    
-                    # Apply payment
-                    current_paid = enrollment.amount_paid or 0
-                    enrollment.amount_paid = current_paid + amount_for_this_enrollment
-                    
-                    # Check if complete
-                    if enrollment.amount_paid >= enrollment.payment_amount:
-                        enrollment.payment_status = PaymentStatus.VERIFIED
-                        enrollment.verification_date = datetime.now()
-                        logger.info(f"✅ Full payment reached for enrollment {enrollment_id}")
-                    else:
-                        enrollment.payment_status = PaymentStatus.PENDING
-                        logger.info(f"⚠️ Still partial for enrollment {enrollment_id}")
-                    
-                    # Store receipt path
-                    existing_receipts = enrollment.receipt_image_path
-                    
-                    if existing_receipts:
-                        enrollment.receipt_image_path = existing_receipts + "," + file_path
-                    else:
-                        enrollment.receipt_image_path = file_path
-                    
-                    logger.info(f"📝 Updated receipt path for enrollment {enrollment_id}")
+                    for idx, item in enumerate(enrollment_remaining_balances):
+                        enrollment = item['enrollment']
+                        enrollment_id = item['enrollment_id']
+                        enrollment_remaining = item['remaining']
+                        
+                        # ✅ Set amount_paid to EXTRACTED AMOUNT from receipt image
+                        current_paid = enrollment.amount_paid or 0
+                        enrollment.amount_paid = current_paid + extracted_amount  # Accumulate total paid
+                        
+                        # Check if complete
+                        if enrollment.amount_paid >= enrollment.payment_amount:
+                            enrollment.payment_status = PaymentStatus.VERIFIED
+                            enrollment.verification_date = datetime.now()
+                            logger.info(f"✅ Full payment reached for enrollment {enrollment_id}")
+                        else:
+                            enrollment.payment_status = PaymentStatus.PENDING
+                            logger.info(f"⚠️ Still partial for enrollment {enrollment_id}")
+                        
+                        # Store receipt path
+                        existing_receipts = enrollment.receipt_image_path
+                        if existing_receipts:
+                            enrollment.receipt_image_path = existing_receipts + "," + file_path
+                        else:
+                            enrollment.receipt_image_path = file_path
+                        
+                        logger.info(f"📝 Updated enrollment {enrollment_id}: amount_paid={enrollment.amount_paid}, status={enrollment.payment_status}")
                 
                 # ✅ FLUSH ONCE after loop ends
                 session.flush()
