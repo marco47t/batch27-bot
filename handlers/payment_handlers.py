@@ -1451,35 +1451,24 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
             os.remove(temp_path)
         return
 
-    # Run receipt processing - only Gemini runs in thread, everything else in main loop
-    # This ensures Telegram API calls work correctly (they need the main event loop)
+    # Run receipt processing directly in the main event loop
+    # Gemini API calls already run in a thread pool (via validate_receipt_with_gemini_ai)
+    # This ensures Telegram API calls stay in the main event loop and don't cause "Event loop is closed" errors
     logger.info(f"Starting receipt processing for user {telegram_user_id}")
-    def run_receipt_processing():
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(
-                _process_receipt_async(
-                    update,
-                    context,
-                    temp_path,
-                    telegram_user_id,
-                    internal_user_id,
-                    expected_amount_for_gemini,
-                    user
-                )
-            )
-        finally:
-            loop.close()
-
-    thread = threading.Thread(
-        target=run_receipt_processing,
-        daemon=True,
-        name=f"ReceiptProcessor-{telegram_user_id}"
+    # Use asyncio.create_task to run it concurrently without blocking
+    # This keeps it in the main event loop where Telegram API calls work correctly
+    asyncio.create_task(
+        _process_receipt_async(
+            update,
+            context,
+            temp_path,
+            telegram_user_id,
+            internal_user_id,
+            expected_amount_for_gemini,
+            user
+        )
     )
-    thread.start()
-    logger.info(f"Receipt processing started in background thread for user {telegram_user_id}")
+    logger.info(f"Receipt processing started as background task for user {telegram_user_id}")
 
 
 async def cancel_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
