@@ -595,7 +595,7 @@ def main():
 
     # Instructor management conversation
     instructor_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(admin_instructor_management.start_add_instructor, pattern='^admin_add_instructor$')],
+        entry_points=[CallbackQueryHandler(admin_instructor_management.start_add_instructor, pattern=r'^admin_add_instructor$')],
         states={
             admin_instructor_management.INSTRUCTOR_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_instructor_management.receive_instructor_name)
@@ -621,10 +621,10 @@ def main():
     application.add_handler(instructor_conv)
 
     # Instructor management menu handlers
-    application.add_handler(CallbackQueryHandler(admin_instructor_management.manage_instructors_menu, pattern='^admin_manage_instructors$'))
-    application.add_handler(CallbackQueryHandler(admin_instructor_management.view_instructors_callback, pattern='^admin_view_instructors$'))
-    application.add_handler(CallbackQueryHandler(admin_instructor_management.edit_instructor_callback, pattern='^admin_edit_instructor_\d+$'))
-    application.add_handler(CallbackQueryHandler(admin_instructor_management.toggle_instructor_status, pattern='^admin_toggle_instructor_\d+$'))
+    application.add_handler(CallbackQueryHandler(admin_instructor_management.manage_instructors_menu, pattern=r'^admin_manage_instructors$'))
+    application.add_handler(CallbackQueryHandler(admin_instructor_management.view_instructors_callback, pattern=r'^admin_view_instructors$'))
+    application.add_handler(CallbackQueryHandler(admin_instructor_management.edit_instructor_callback, pattern=r'^admin_edit_instructor_\d+$'))
+    application.add_handler(CallbackQueryHandler(admin_instructor_management.toggle_instructor_status, pattern=r'^admin_toggle_instructor_\d+$'))
 
     # Student review instructor command
     application.add_handler(CommandHandler("review_instructor", instructor_reviews.review_instructor_command))    
