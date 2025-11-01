@@ -69,210 +69,150 @@ async def proceed_to_payment_callback(update: Update, context: ContextTypes.DEFA
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+import threading
 
-# Create a dedicated thread pool executor for Gemini calls
-# This ensures Gemini processing doesn't block other bot operations
-_gemini_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="gemini-")
+# Create a dedicated thread pool executor for user receipt processing
+# Each user gets their own thread, completely independent from others
+_user_processing_executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="user-receipt-")
 
 async def run_in_thread(func, *args):
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, func, *args)
 
-def _run_async_in_sync_context(async_func, *args):
+def _run_user_processing_in_thread(async_processing_func, *args):
     """
-    Synchronous wrapper that runs an async function in its own event loop.
-    This is designed to be called from a thread executor.
+    Run an async processing function in its own thread with its own event loop.
+    This ensures each user's receipt processing is completely isolated.
     """
     # Create a new event loop for this thread
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
         # Run the async function in the new loop
-        return loop.run_until_complete(async_func(*args))
+        return loop.run_until_complete(async_processing_func(*args))
     finally:
+        # Clean up the event loop
         loop.close()
 
-async def run_gemini_in_thread(async_func, *args):
+async def run_user_processing_in_thread(async_func, *args):
     """
-    Run an async function (like Gemini validation) in a dedicated thread pool.
-    This prevents blocking the main event loop for other users.
+    Run user receipt processing in a dedicated thread with its own event loop.
+    Each user's processing runs completely independently, preventing any blocking.
     """
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
-        _gemini_executor,
-        _run_async_in_sync_context,
+        _user_processing_executor,
+        _run_user_processing_in_thread,
         async_func,
         *args
     )
 
-async def receipt_upload_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle receipt image/document uploads with comprehensive fraud detection and S3 storage"""
-    
-    if not context.user_data.get("awaiting_receipt_upload"):
-        return
+async def _process_receipt_async(update: Update, context: ContextTypes.DEFAULT_TYPE, temp_path: str, 
+                                  telegram_user_id: int, internal_user_id: int, expected_amount_for_gemini: float, user):
+    """
+    Process receipt in its own thread - completely independent from other users.
+    This function runs all receipt processing logic (Gemini, fraud detection, DB updates, etc.)
+    in its own thread with its own event loop.
+    """
+    # Initialize variables for processing
     file_path = None
-    temp_path = None
     enrollments_to_update = []
     enrollment_ids_to_update = []
-    expected_amount_for_gemini = 0
     resubmission_enrollment_id = None
-    internal_user_id = None
     transaction_id = None
     transfer_datetime = None
     sender_name = None
     extracted_amount = None
-    user = update.effective_user
-    file = None
-    telegram_user_id = user.id
     fraud_score = 0 
-    duplicate_check_result = {'fraud_score': 0, 'is_duplicate': False}  # ← ADD THIS LINE
-    fraud_indicators = []  
-    logger.info(f"Receipt upload started for user {telegram_user_id}")
+    duplicate_check_result = {'fraud_score': 0, 'is_duplicate': False}
+    fraud_indicators = []
     
-    # GET INTERNAL USER ID FIRST
-    with get_db() as session:
-        db_user = crud.get_or_create_user(
-            session,
-            telegram_user_id=telegram_user_id,
-            username=user.username,
-            first_name=user.first_name,
-            last_name=user.last_name
+    try:
+        # ==================== STEP 1: GEMINI AI VALIDATION ====================
+        logger.info(f"Starting Gemini validation for user {telegram_user_id}: expected_amount=${expected_amount_for_gemini}")
+
+        # Run Gemini validation directly (already in its own thread)
+        gemini_result = await validate_receipt_with_gemini_ai(
+            temp_path,
+            expected_amount_for_gemini,
+            config.EXPECTED_ACCOUNTS
         )
-        session.flush()
-        internal_user_id = db_user.user_id
-    
-    logger.info(f"User {telegram_user_id} has internal ID: {internal_user_id}")
-    
-    # Validate file type
-    if update.message.document:
-        file = update.message.document
-    elif update.message.photo:
-        file = update.message.photo[-1]
-    else:
-        logger.warning(f"User {telegram_user_id} sent invalid file type")
-        await update.message.reply_text("❌ Please send a valid image or PDF receipt.", reply_markup=payment_upload_keyboard())
-        return
-    
-    if not validate_receipt_file(file):
-        logger.warning(f"User {telegram_user_id} receipt validation failed")
-        await update.message.reply_text("❌ Please send a valid image or PDF receipt.", reply_markup=payment_upload_keyboard())
-        return
-    
-    # Download file to temporary location first
-    file_info = await file.get_file()
-    
-    # Create temporary file
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_file:
-        temp_path = temp_file.name
-    
-    # Download to temp path
-    await file_info.download_to_drive(temp_path)
-    
-    logger.info(f"Receipt downloaded to temp path for user {telegram_user_id}: {temp_path}")
-    log_user_action(telegram_user_id, "receipt_uploaded", f"temp_path={temp_path}")
+        transaction_id = gemini_result.get('transaction_id')
+        logger.info(f"🔍 DUPLICATE CHECK - Transaction ID extracted: '{transaction_id}' (type: {type(transaction_id)})")
+        # Check for duplicate transaction ID
+        transaction_duplicate_check = check_transaction_id_duplicate(transaction_id, internal_user_id)
 
-    # Notify user that processing started
-    await update.message.reply_text(receipt_processing_message(), reply_markup=None)
+        # ✅ ADD THIS LOG
+        logger.info(f"🔍 DUPLICATE CHECK - Result: {transaction_duplicate_check}")
+        logger.info(f"🔍 DUPLICATE CHECK - is_duplicate={transaction_duplicate_check.get('is_duplicate')}, fraud_score={transaction_duplicate_check.get('fraud_score', 0)}")
 
-    # Get expected amount
-    expected_amount_for_gemini = context.user_data.get("reupload_amount") or context.user_data.get("current_payment_total")
+        transfer_datetime = parse_transfer_datetime(gemini_result)  # Parse date + time
+        sender_name = gemini_result.get('sender_name')
+        extracted_amount = gemini_result.get('amount')
 
-    if expected_amount_for_gemini is None:
-        logger.error(f"User {telegram_user_id} missing expected payment amount")
-        await update.message.reply_text(error_message("payment_amount_missing"), reply_markup=back_to_main_keyboard())
-        log_user_action(telegram_user_id, "receipt_upload_failed", "expected_amount_for_gemini missing")
-        context.user_data["awaiting_receipt_upload"] = False
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-        return
+        logger.info(f"Gemini validation result: is_valid={gemini_result.get('is_valid')}, amount={gemini_result.get('amount')}, tx_id={gemini_result.get('transaction_id')}")
 
-    # ==================== STEP 1: GEMINI AI VALIDATION ====================
-    logger.info(f"Starting Gemini validation for user {telegram_user_id}: expected_amount=${expected_amount_for_gemini}")
+        # ==================== FRAUD DETECTION ====================
+        logger.info(f"🔍 Running fraud detection for user {telegram_user_id}")
 
-    # Run Gemini validation in a dedicated thread pool to avoid blocking other users
-    # This uses a separate executor that won't interfere with the main event loop
-    gemini_result = await run_gemini_in_thread(
-        validate_receipt_with_gemini_ai,
-        temp_path,
-        expected_amount_for_gemini,
-        config.EXPECTED_ACCOUNTS
-    )
-    transaction_id = gemini_result.get('transaction_id')
-    logger.info(f"🔍 DUPLICATE CHECK - Transaction ID extracted: '{transaction_id}' (type: {type(transaction_id)})")
-    # Check for duplicate transaction ID
-    transaction_duplicate_check = check_transaction_id_duplicate(transaction_id, internal_user_id)
+        # Extract transaction ID from Gemini result
+        transaction_id = gemini_result.get('transaction_id', 'N/A')
+        logger.info(f"📋 Extracted Transaction ID from receipt: {transaction_id}")
 
-    # ✅ ADD THIS LOG
-    logger.info(f"🔍 DUPLICATE CHECK - Result: {transaction_duplicate_check}")
-    logger.info(f"🔍 DUPLICATE CHECK - is_duplicate={transaction_duplicate_check.get('is_duplicate')}, fraud_score={transaction_duplicate_check.get('fraud_score', 0)}")
+        # ✅ NEW: Check transaction ID duplicate (returns 50 if duplicate, 0 otherwise)
+        transaction_duplicate_check = check_transaction_id_duplicate(transaction_id, internal_user_id)
 
-    transfer_datetime = parse_transfer_datetime(gemini_result)  # Parse date + time
-    sender_name = gemini_result.get('sender_name')
-    extracted_amount = gemini_result.get('amount')
+        # ✅ NEW: Image duplicate check (always returns 0 - disabled)
+        from services.duplicate_detector import check_duplicate_submission
+        image_duplicate_check = check_duplicate_submission(
+            user_id=internal_user_id,
+            image_path=file_path,
+            previous_receipt_paths=[e.receipt_image_path for e in enrollments_to_update if e.receipt_image_path]
+        )
 
-    logger.info(f"Gemini validation result: is_valid={gemini_result.get('is_valid')}, amount={gemini_result.get('amount')}, tx_id={gemini_result.get('transaction_id')}")
+        # Timezone-aware submission date (GMT+2)
+        egypt_tz = pytz.timezone('Africa/Cairo')
+        submission_date = datetime.now(egypt_tz)
 
-    # ==================== FRAUD DETECTION ====================
-    logger.info(f"🔍 Running fraud detection for user {telegram_user_id}")
-
-    # Extract transaction ID from Gemini result
-    transaction_id = gemini_result.get('transaction_id', 'N/A')
-    logger.info(f"📋 Extracted Transaction ID from receipt: {transaction_id}")
-
-    # ✅ NEW: Check transaction ID duplicate (returns 50 if duplicate, 0 otherwise)
-    transaction_duplicate_check = check_transaction_id_duplicate(transaction_id, internal_user_id)
-
-    # ✅ NEW: Image duplicate check (always returns 0 - disabled)
-    from services.duplicate_detector import check_duplicate_submission
-    image_duplicate_check = check_duplicate_submission(
-        user_id=internal_user_id,
-        image_path=file_path,
-        previous_receipt_paths=[e.receipt_image_path for e in enrollments_to_update if e.receipt_image_path]
-    )
-
-    # Timezone-aware submission date (GMT+2)
-    egypt_tz = pytz.timezone('Africa/Cairo')
-    submission_date = datetime.now(egypt_tz)
-
-    gemini_result['submission_date'] = submission_date.isoformat()
-    gemini_result['transfer_date'] = transfer_datetime.isoformat() if transfer_datetime else None
-    # Calculate final fraud score
-    fraud_score = transaction_duplicate_check.get('fraud_score', 0)  # 50 if duplicate ID, 0 otherwise
-    logger.info(f"💯 FRAUD SCORE CALCULATION - Initial score from duplicate check: {fraud_score}")
-    fraud_analysis = calculate_consolidated_fraud_score(
+        gemini_result['submission_date'] = submission_date.isoformat()
+        gemini_result['transfer_date'] = transfer_datetime.isoformat() if transfer_datetime else None
+        # Calculate final fraud score
+        fraud_score = transaction_duplicate_check.get('fraud_score', 0)  # 50 if duplicate ID, 0 otherwise
+        logger.info(f"💯 FRAUD SCORE CALCULATION - Initial score from duplicate check: {fraud_score}")
+        fraud_analysis = calculate_consolidated_fraud_score(
         gemini_result=gemini_result,
         image_forensics_result={'is_forged': False, 'ela_score': 0},  # ✅ Disabled, pass empty dict
         duplicate_check_result=duplicate_check_result  # ✅ Correct parameter name
-    )
-    image_similarity_score = image_duplicate_check.get('image_similarity_score', 0)  # Always 0
-
-    logger.info(f"📊 Fraud Scores - Transaction ID: {fraud_score}, Image: {image_similarity_score}")
-
-    # Build fraud analysis result
-    fraud_indicators = []
-    if transaction_duplicate_check.get('is_duplicate'):
-        fraud_indicators.append(
-            f"Duplicate transaction ID: {transaction_id} (previously used by user {transaction_duplicate_check.get('original_telegram_id')})"
         )
-    # ✅ ADD THIS LOG BEFORE THE DECISION
-    logger.info(f"⚖️ DECISION POINT - Final fraud_score: {fraud_score}")
-    logger.info(f"⚖️ DECISION POINT - Thresholds: REJECT>=70, MANUAL_REVIEW>=40")
+        image_similarity_score = image_duplicate_check.get('image_similarity_score', 0)  # Always 0
 
-    # Determine recommendation based on fraud score
-    if fraud_score >= 70:
-        recommendation = 'REJECT'
-    elif fraud_score >= 40:
-        recommendation = 'MANUAL_REVIEW'
-    else:
-        recommendation = 'APPROVE'
+        logger.info(f"📊 Fraud Scores - Transaction ID: {fraud_score}, Image: {image_similarity_score}")
 
-    fraud_analysis = {
-        'fraud_score': fraud_score,
-        'recommendation': recommendation,
-        'fraud_indicators': fraud_indicators,
-        'duplicate_check_result': {
-            'is_duplicate': transaction_duplicate_check.get('is_duplicate', False),
-            'similarity_score': transaction_duplicate_check.get('similarity_score', 0)
+        # Build fraud analysis result
+        fraud_indicators = []
+        if transaction_duplicate_check.get('is_duplicate'):
+            fraud_indicators.append(
+                f"Duplicate transaction ID: {transaction_id} (previously used by user {transaction_duplicate_check.get('original_telegram_id')})"
+            )
+        # ✅ ADD THIS LOG BEFORE THE DECISION
+        logger.info(f"⚖️ DECISION POINT - Final fraud_score: {fraud_score}")
+        logger.info(f"⚖️ DECISION POINT - Thresholds: REJECT>=70, MANUAL_REVIEW>=40")
+
+        # Determine recommendation based on fraud score
+        if fraud_score >= 70:
+            recommendation = 'REJECT'
+        elif fraud_score >= 40:
+            recommendation = 'MANUAL_REVIEW'
+        else:
+            recommendation = 'APPROVE'
+
+        fraud_analysis = {
+            'fraud_score': fraud_score,
+            'recommendation': recommendation,
+            'fraud_indicators': fraud_indicators,
+            'duplicate_check_result': {
+                'is_duplicate': transaction_duplicate_check.get('is_duplicate', False),
+                'similarity_score': transaction_duplicate_check.get('similarity_score', 0)
         },
         'ai_validation': gemini_result,
         'checks_performed': [
@@ -280,177 +220,177 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
             'Image similarity check (disabled - returns 0)',
             'Gemini AI receipt validation'
         ]
-    }
+        }
 
-    logger.info(f"🎯 Fraud Analysis: Score={fraud_score}, Recommendation={recommendation}")
+        logger.info(f"🎯 Fraud Analysis: Score={fraud_score}, Recommendation={recommendation}")
 
-    # Store duplicate check details for admin notifications
-    duplicate_image_check = transaction_duplicate_check  # Use transaction check for admin display
-    duplicate_check_result = {
+        # Store duplicate check details for admin notifications
+        duplicate_image_check = transaction_duplicate_check  # Use transaction check for admin display
+        duplicate_check_result = {
         'is_duplicate': transaction_duplicate_check.get('is_duplicate', False),
         'similarity_score': transaction_duplicate_check.get('similarity_score', 0),
         'match_type': transaction_duplicate_check.get('match_type', 'NONE'),
         'risk_level': transaction_duplicate_check.get('risk_level', 'LOW')
-    }
-    # ===== IMAGE FORENSICS ANALYSIS =====
-    from services.image_forensics import analyze_image_metadata
-    from services.ela_detector import perform_ela
+        }
+        # ===== IMAGE FORENSICS ANALYSIS =====
+        from services.image_forensics import analyze_image_metadata
+        from services.ela_detector import perform_ela
 
-    metadata_analysis = analyze_image_metadata(temp_path)
-    ela_analysis = perform_ela(temp_path)
+        metadata_analysis = analyze_image_metadata(temp_path)
+        ela_analysis = perform_ela(temp_path)
 
-    image_forensics_result = {
+        image_forensics_result = {
         "is_forged": ela_analysis.get("is_suspicious", False) or metadata_analysis.get("risk_level") == "HIGH",
         "ela_score": ela_analysis.get("risk_score", 0) * 20,
         "metadata_risk": metadata_analysis.get("risk_level", "LOW"),
         "metadata_flags": metadata_analysis.get("suspicious_flags", []),
         "ela_reasons": ela_analysis.get("reasons", [])
-    }
-    logger.info(f"Image forensics: is_forged={image_forensics_result.get('is_forged')}, ela_score={image_forensics_result.get('ela_score', 0)}")
+        }
+        logger.info(f"Image forensics: is_forged={image_forensics_result.get('is_forged')}, ela_score={image_forensics_result.get('ela_score', 0)}")
 
-    # ✅ COLLECT ALL PREVIOUS RECEIPTS FROM CURRENT USER'S ENROLLMENTS (FOR SAME-USER DUPLICATE CHECK)
-    all_previous_receipt_paths = []
+        # ✅ COLLECT ALL PREVIOUS RECEIPTS FROM CURRENT USER'S ENROLLMENTS (FOR SAME-USER DUPLICATE CHECK)
+        all_previous_receipt_paths = []
 
-    with get_db() as dup_session:
-        current_payment_enrollment_ids = context.user_data.get("current_payment_enrollment_ids", [])
-        resubmission_enrollment_id = context.user_data.get("resubmission_enrollment_id")
-        
-        enrollment_ids_to_check = current_payment_enrollment_ids if not resubmission_enrollment_id else [resubmission_enrollment_id]
-        
-        for eid in enrollment_ids_to_check:
-            enrollment = crud.get_enrollment_by_id(dup_session, eid)
-            if enrollment and enrollment.receipt_image_path:
-                # ✅ Split comma-separated paths
-                receipt_paths = [p.strip() for p in enrollment.receipt_image_path.split(',') if p.strip()]
-                all_previous_receipt_paths.extend(receipt_paths)
-
-    logger.info(f"Checking duplicate against {len(all_previous_receipt_paths)} previous receipts from SAME user for re-submission check")
-    # Now check duplicates against ALL previous receipts
-    all_previous_receipt_paths = []
-
-    with get_db() as dup_session:
-        current_payment_enrollment_ids = context.user_data.get("current_payment_enrollment_ids", [])
-        resubmission_enrollment_id = context.user_data.get("resubmission_enrollment_id")
-        
-        enrollment_ids_to_check = current_payment_enrollment_ids if not resubmission_enrollment_id else [resubmission_enrollment_id]
-        
-        for eid in enrollment_ids_to_check:
-            enrollment = crud.get_enrollment_by_id(dup_session, eid)
-            if enrollment and enrollment.receipt_image_path:
-                # Split comma-separated paths
-                receipt_paths = enrollment.receipt_image_path.split(',')
-                # Filter out empty strings and add to list
-                all_previous_receipt_paths.extend([path.strip() for path in receipt_paths if path.strip()])
-
-    logger.info(f"Checking duplicate against {len(all_previous_receipt_paths)} previous receipts for user {telegram_user_id}")
-
-    from services.duplicate_detector import check_duplicate_submission
-    duplicate_image_check = check_duplicate_submission(internal_user_id, temp_path, previous_receipt_paths=all_previous_receipt_paths)
-
-    duplicate_check_result["is_duplicate"] = duplicate_image_check.get("is_duplicate", False)
-    duplicate_check_result["similarity_score"] = duplicate_image_check.get("similarity_percentage", 0)
-
-    if duplicate_check_result["is_duplicate"]:
-        logger.warning(f"⚠️ DUPLICATE RECEIPT DETECTED! User {telegram_user_id} tried to reuse receipt")
-        logger.warning(f"   Original owner: {duplicate_image_check.get('original_user_name')} (@{duplicate_image_check.get('original_user_username')})")
-        logger.warning(f"   Similarity: {duplicate_check_result['similarity_score']:.1f}%")
-        logger.warning(f"   Match type: {duplicate_image_check.get('match_type')}")
-        
-        # Add high fraud contribution for duplicates
-        duplicate_check_result["fraud_contribution"] = 55
-        logger.info(f"⚠️ Duplicate detected - adding 55 points to fraud score")
-    else:
-        duplicate_check_result["fraud_contribution"] = 0
-    logger.info(f"🎯 Fraud Analysis - Score: {fraud_analysis.get('fraud_score', 0)}/100, Risk: {fraud_analysis.get('risk_level', 'UNKNOWN')}, Action: {fraud_analysis.get('recommendation', 'UNKNOWN')}")
-    logger.info(f"📋 Fraud indicators: {fraud_analysis['fraud_indicators']}")
-
-    # ==================== STEP 3: UPLOAD TO S3 ====================
-    try:
-        resubmission_enrollment_id = context.user_data.get("resubmission_enrollment_id")
-        if resubmission_enrollment_id:
-            enrollment_id_for_s3 = resubmission_enrollment_id
-        else:
+        with get_db() as dup_session:
             current_payment_enrollment_ids = context.user_data.get("current_payment_enrollment_ids", [])
-            enrollment_id_for_s3 = current_payment_enrollment_ids[0] if current_payment_enrollment_ids else 0
-        
-        s3_url = upload_receipt_to_s3(temp_path, internal_user_id, enrollment_id_for_s3)
-        file_path = s3_url
-        logger.info(f"✅ Receipt uploaded to S3: {s3_url}")
-        
-    except Exception as e:
-        logger.error(f"❌ S3 upload failed: {e}")
-        file_path = temp_path
-        logger.warning(f"Using local temp path as fallback: {temp_path}")
-    
-    # ==================== DECISION LOGIC ====================
-    
-    # Get enrollments to update
-    verified_courses = []
-    group_links = []
-    enrollment_ids_str = ""
-    
-    with get_db() as session:
-        resubmission_enrollment_id = context.user_data.get("resubmission_enrollment_id")
-        enrollments_to_update = []
-        
-        if resubmission_enrollment_id:
-            logger.info(f"Processing resubmission for user {telegram_user_id}, enrollment {resubmission_enrollment_id}")
-            enrollment = crud.get_enrollment_by_id(session, resubmission_enrollment_id)
-            if enrollment and enrollment.user_id == internal_user_id:
-                enrollments_to_update.append(enrollment)
-        else:
-            # Check for partial payment continuation (stored enrollment IDs)
-            current_payment_enrollment_ids = context.user_data.get("current_payment_enrollment_ids")
+            resubmission_enrollment_id = context.user_data.get("resubmission_enrollment_id")
             
-            if current_payment_enrollment_ids:
-                # Parse enrollment IDs from string (e.g., "139" or "139,140")
-                if isinstance(current_payment_enrollment_ids, str):
-                    enrollment_ids = [int(eid.strip()) for eid in current_payment_enrollment_ids.split(',') if eid.strip()]
-                else:
-                    enrollment_ids = current_payment_enrollment_ids  # Already a list
-                
-                logger.info(f"🔄 Continuing partial payment for user {telegram_user_id}, stored enrollments: {enrollment_ids}")
-                
-                for eid in enrollment_ids:
-                    enrollment = crud.get_enrollment_by_id(session, eid)
-                    if enrollment and enrollment.user_id == internal_user_id:
-                        enrollments_to_update.append(enrollment)
-            else:
-                # Initial payment - get PENDING enrollments
-                logger.info(f"Processing initial payment for user {telegram_user_id}")
-                enrollments_to_update = crud.get_user_pending_enrollments(session, internal_user_id)
-        
-        if not enrollments_to_update:
-            logger.error(f"No enrollments found for user {telegram_user_id}")
-            await update.message.reply_text(error_message("enrollment_not_found"), reply_markup=back_to_main_keyboard())
-            log_user_action(telegram_user_id, "receipt_upload_failed", "No enrollments to update/process")
-            context.user_data["awaiting_receipt_upload"] = False
-            # Clean up temp file
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            return
+            enrollment_ids_to_check = current_payment_enrollment_ids if not resubmission_enrollment_id else [resubmission_enrollment_id]
+            
+            for eid in enrollment_ids_to_check:
+                enrollment = crud.get_enrollment_by_id(dup_session, eid)
+                if enrollment and enrollment.receipt_image_path:
+                    # ✅ Split comma-separated paths
+                    receipt_paths = [p.strip() for p in enrollment.receipt_image_path.split(',') if p.strip()]
+                    all_previous_receipt_paths.extend(receipt_paths)
 
-        
-        enrollment_ids_to_update = [e.enrollment_id for e in enrollments_to_update]
-        enrollment_ids_str = ', '.join(map(str, enrollment_ids_to_update))
-        # ===== STORE RECEIPT METADATA IN DATABASE =====
-        logger.info(f"💾 Storing receipt metadata for enrollments: {enrollment_ids_str}")
-        
-        for enrollment_id in enrollment_ids_to_update:
-            metadata_stored = crud.update_enrollment_receipt_metadata(
-                session,
-                enrollment_id=enrollment_id,
-                transaction_id=gemini_result.get("transaction_id"),
-                transfer_date=gemini_result.get("transfer_datetime"),
-                sender_name=gemini_result.get("sender_name") or gemini_result.get("recipient_name")
-            )
-            if metadata_stored:
-                logger.info(f"✅ Metadata stored for enrollment {enrollment_id}")
+        logger.info(f"Checking duplicate against {len(all_previous_receipt_paths)} previous receipts from SAME user for re-submission check")
+        # Now check duplicates against ALL previous receipts
+        all_previous_receipt_paths = []
+
+        with get_db() as dup_session:
+            current_payment_enrollment_ids = context.user_data.get("current_payment_enrollment_ids", [])
+            resubmission_enrollment_id = context.user_data.get("resubmission_enrollment_id")
+            
+            enrollment_ids_to_check = current_payment_enrollment_ids if not resubmission_enrollment_id else [resubmission_enrollment_id]
+            
+            for eid in enrollment_ids_to_check:
+                enrollment = crud.get_enrollment_by_id(dup_session, eid)
+                if enrollment and enrollment.receipt_image_path:
+                    # Split comma-separated paths
+                    receipt_paths = enrollment.receipt_image_path.split(',')
+                    # Filter out empty strings and add to list
+                    all_previous_receipt_paths.extend([path.strip() for path in receipt_paths if path.strip()])
+
+        logger.info(f"Checking duplicate against {len(all_previous_receipt_paths)} previous receipts for user {telegram_user_id}")
+
+        from services.duplicate_detector import check_duplicate_submission
+        duplicate_image_check = check_duplicate_submission(internal_user_id, temp_path, previous_receipt_paths=all_previous_receipt_paths)
+
+        duplicate_check_result["is_duplicate"] = duplicate_image_check.get("is_duplicate", False)
+        duplicate_check_result["similarity_score"] = duplicate_image_check.get("similarity_percentage", 0)
+
+        if duplicate_check_result["is_duplicate"]:
+            logger.warning(f"⚠️ DUPLICATE RECEIPT DETECTED! User {telegram_user_id} tried to reuse receipt")
+            logger.warning(f"   Original owner: {duplicate_image_check.get('original_user_name')} (@{duplicate_image_check.get('original_user_username')})")
+            logger.warning(f"   Similarity: {duplicate_check_result['similarity_score']:.1f}%")
+            logger.warning(f"   Match type: {duplicate_image_check.get('match_type')}")
+            
+            # Add high fraud contribution for duplicates
+            duplicate_check_result["fraud_contribution"] = 55
+            logger.info(f"⚠️ Duplicate detected - adding 55 points to fraud score")
+        else:
+            duplicate_check_result["fraud_contribution"] = 0
+        logger.info(f"🎯 Fraud Analysis - Score: {fraud_analysis.get('fraud_score', 0)}/100, Risk: {fraud_analysis.get('risk_level', 'UNKNOWN')}, Action: {fraud_analysis.get('recommendation', 'UNKNOWN')}")
+        logger.info(f"📋 Fraud indicators: {fraud_analysis['fraud_indicators']}")
+
+        # ==================== STEP 3: UPLOAD TO S3 ====================
+        try:
+            resubmission_enrollment_id = context.user_data.get("resubmission_enrollment_id")
+            if resubmission_enrollment_id:
+                enrollment_id_for_s3 = resubmission_enrollment_id
             else:
-                logger.warning(f"⚠️ Failed to store metadata for enrollment {enrollment_id}")
+                current_payment_enrollment_ids = context.user_data.get("current_payment_enrollment_ids", [])
+                enrollment_id_for_s3 = current_payment_enrollment_ids[0] if current_payment_enrollment_ids else 0
+            
+            s3_url = upload_receipt_to_s3(temp_path, internal_user_id, enrollment_id_for_s3)
+            file_path = s3_url
+            logger.info(f"✅ Receipt uploaded to S3: {s3_url}")
+            
+        except Exception as e:
+            logger.error(f"❌ S3 upload failed: {e}")
+            file_path = temp_path
+            logger.warning(f"Using local temp path as fallback: {temp_path}")
         
-        session.commit()
-        logger.info(f"💾 Receipt metadata committed to database")
+        # ==================== DECISION LOGIC ====================
+        
+        # Get enrollments to update
+        verified_courses = []
+        group_links = []
+        enrollment_ids_str = ""
+        
+        with get_db() as session:
+            resubmission_enrollment_id = context.user_data.get("resubmission_enrollment_id")
+            enrollments_to_update = []
+            
+            if resubmission_enrollment_id:
+                logger.info(f"Processing resubmission for user {telegram_user_id}, enrollment {resubmission_enrollment_id}")
+                enrollment = crud.get_enrollment_by_id(session, resubmission_enrollment_id)
+                if enrollment and enrollment.user_id == internal_user_id:
+                    enrollments_to_update.append(enrollment)
+            else:
+                # Check for partial payment continuation (stored enrollment IDs)
+                current_payment_enrollment_ids = context.user_data.get("current_payment_enrollment_ids")
+                
+                if current_payment_enrollment_ids:
+                    # Parse enrollment IDs from string (e.g., "139" or "139,140")
+                    if isinstance(current_payment_enrollment_ids, str):
+                        enrollment_ids = [int(eid.strip()) for eid in current_payment_enrollment_ids.split(',') if eid.strip()]
+                    else:
+                        enrollment_ids = current_payment_enrollment_ids  # Already a list
+                    
+                    logger.info(f"🔄 Continuing partial payment for user {telegram_user_id}, stored enrollments: {enrollment_ids}")
+                    
+                    for eid in enrollment_ids:
+                        enrollment = crud.get_enrollment_by_id(session, eid)
+                        if enrollment and enrollment.user_id == internal_user_id:
+                            enrollments_to_update.append(enrollment)
+                else:
+                    # Initial payment - get PENDING enrollments
+                    logger.info(f"Processing initial payment for user {telegram_user_id}")
+                    enrollments_to_update = crud.get_user_pending_enrollments(session, internal_user_id)
+            
+                if not enrollments_to_update:
+                    logger.error(f"No enrollments found for user {telegram_user_id}")
+                    await update.message.reply_text(error_message("enrollment_not_found"), reply_markup=back_to_main_keyboard())
+                    log_user_action(telegram_user_id, "receipt_upload_failed", "No enrollments to update/process")
+                    context.user_data["awaiting_receipt_upload"] = False
+                    # Clean up temp file
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                    return
+
+            
+            enrollment_ids_to_update = [e.enrollment_id for e in enrollments_to_update]
+            enrollment_ids_str = ', '.join(map(str, enrollment_ids_to_update))
+            # ===== STORE RECEIPT METADATA IN DATABASE =====
+            logger.info(f"💾 Storing receipt metadata for enrollments: {enrollment_ids_str}")
+            
+            for enrollment_id in enrollment_ids_to_update:
+                metadata_stored = crud.update_enrollment_receipt_metadata(
+                    session,
+                    enrollment_id=enrollment_id,
+                    transaction_id=gemini_result.get("transaction_id"),
+                    transfer_date=gemini_result.get("transfer_datetime"),
+                    sender_name=gemini_result.get("sender_name") or gemini_result.get("recipient_name")
+                )
+                if metadata_stored:
+                    logger.info(f"✅ Metadata stored for enrollment {enrollment_id}")
+                else:
+                    logger.warning(f"⚠️ Failed to store metadata for enrollment {enrollment_id}")
+            
+            session.commit()
+            logger.info(f"💾 Receipt metadata committed to database")
         # ==================== FRAUD ACTION: REJECT ====================
         if fraud_analysis["recommendation"] == "REJECT":
             logger.warning(f"Receipt REJECTED for user {telegram_user_id}: Fraud detected with score {fraud_analysis['fraud_score']}")
@@ -1283,23 +1223,23 @@ ID: <code>{telegram_user_id}</code>
             
             session.commit()
     
-    # ==================== USER NOTIFICATIONS ====================
+        # ==================== USER NOTIFICATIONS ====================
     
-    if result["is_valid"]:
-        logger.info(f"Payment SUCCESS for user {telegram_user_id}, enrollments: {enrollment_ids_str}, Fraud Score: {fraud_analysis['fraud_score']}")
-        
-        # ✅ DELETE PROCESSING MESSAGE FIRST
-        try:
-            if update.message:
-                await update.message.delete()
-        except Exception as e:
-            logger.warning(f"Could not delete processing message: {e}")
-        
-        # ✅ NO redundant success message - send_course_invite_link already sent the success message with group link
-        
-        log_user_action(telegram_user_id, "payment_success", f"enrollment_ids={enrollment_ids_str}, fraud_score={fraud_analysis['fraud_score']}")
-    else:
-        logger.warning(f"Payment FAILED for user {telegram_user_id}: {result.get('reason')}, Fraud Score: {fraud_analysis['fraud_score']}")
+        if result["is_valid"]:
+            logger.info(f"Payment SUCCESS for user {telegram_user_id}, enrollments: {enrollment_ids_str}, Fraud Score: {fraud_analysis['fraud_score']}")
+            
+            # ✅ DELETE PROCESSING MESSAGE FIRST
+            try:
+                if update.message:
+                    await update.message.delete()
+            except Exception as e:
+                logger.warning(f"Could not delete processing message: {e}")
+            
+            # ✅ NO redundant success message - send_course_invite_link already sent the success message with group link
+            
+            log_user_action(telegram_user_id, "payment_success", f"enrollment_ids={enrollment_ids_str}, fraud_score={fraud_analysis['fraud_score']}")
+        else:
+            logger.warning(f"Payment FAILED for user {telegram_user_id}: {result.get('reason')}, Fraud Score: {fraud_analysis['fraud_score']}")
         
         # Send user notification
         await update.message.reply_text(
@@ -1376,22 +1316,112 @@ ID: {telegram_user_id}
                 f"Receipt validation failed for user {telegram_user_id}. File: {file_path}"
             )
     
-    # Clean up context data
-    context.user_data["awaiting_receipt_upload"] = False
-    context.user_data.pop("cart_total_for_payment", None)
-    context.user_data.pop("pending_enrollment_ids_for_payment", None)
-    context.user_data.pop("current_payment_enrollment_ids", None)
-    context.user_data.pop("current_payment_total", None)
-    context.user_data.pop("resubmission_enrollment_id", None)
-    context.user_data.pop("reupload_amount", None)
+    except Exception as e:
+        logger.error(f"Error processing receipt for user {telegram_user_id}: {e}", exc_info=True)
+        try:
+            await update.message.reply_text(
+                error_message("processing_error"),
+                reply_markup=back_to_main_keyboard()
+            )
+        except Exception as reply_error:
+            logger.error(f"Failed to send error message to user {telegram_user_id}: {reply_error}")
+    finally:
+        # Clean up context data
+        context.user_data["awaiting_receipt_upload"] = False
+        context.user_data.pop("cart_total_for_payment", None)
+        context.user_data.pop("pending_enrollment_ids_for_payment", None)
+        context.user_data.pop("current_payment_enrollment_ids", None)
+        context.user_data.pop("current_payment_total", None)
+        context.user_data.pop("resubmission_enrollment_id", None)
+        context.user_data.pop("reupload_amount", None)
+        
+        # Clean up temporary file
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+                logger.info(f"Cleaned up temp file: {temp_path}")
+        except Exception as cleanup_error:
+            logger.warning(f"Failed to clean up temp file {temp_path}: {cleanup_error}")
+
+async def receipt_upload_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle receipt image/document uploads with comprehensive fraud detection and S3 storage"""
     
-    # Clean up temporary file
-    try:
+    if not context.user_data.get("awaiting_receipt_upload"):
+        return
+    
+    user = update.effective_user
+    telegram_user_id = user.id
+    logger.info(f"Receipt upload started for user {telegram_user_id}")
+    
+    # GET INTERNAL USER ID FIRST
+    with get_db() as session:
+        db_user = crud.get_or_create_user(
+            session,
+            telegram_user_id=telegram_user_id,
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name
+        )
+        session.flush()
+        internal_user_id = db_user.user_id
+    
+    logger.info(f"User {telegram_user_id} has internal ID: {internal_user_id}")
+    
+    # Validate file type
+    if update.message.document:
+        file = update.message.document
+    elif update.message.photo:
+        file = update.message.photo[-1]
+    else:
+        logger.warning(f"User {telegram_user_id} sent invalid file type")
+        await update.message.reply_text("❌ Please send a valid image or PDF receipt.", reply_markup=payment_upload_keyboard())
+        return
+    
+    if not validate_receipt_file(file):
+        logger.warning(f"User {telegram_user_id} receipt validation failed")
+        await update.message.reply_text("❌ Please send a valid image or PDF receipt.", reply_markup=payment_upload_keyboard())
+        return
+    
+    # Download file to temporary location first
+    file_info = await file.get_file()
+    
+    # Create temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_file:
+        temp_path = temp_file.name
+    
+    # Download to temp path
+    await file_info.download_to_drive(temp_path)
+    
+    logger.info(f"Receipt downloaded to temp path for user {telegram_user_id}: {temp_path}")
+    log_user_action(telegram_user_id, "receipt_uploaded", f"temp_path={temp_path}")
+
+    # Notify user that processing started
+    await update.message.reply_text(receipt_processing_message(), reply_markup=None)
+
+    # Get expected amount
+    expected_amount_for_gemini = context.user_data.get("reupload_amount") or context.user_data.get("current_payment_total")
+
+    if expected_amount_for_gemini is None:
+        logger.error(f"User {telegram_user_id} missing expected payment amount")
+        await update.message.reply_text(error_message("payment_amount_missing"), reply_markup=back_to_main_keyboard())
+        log_user_action(telegram_user_id, "receipt_upload_failed", "expected_amount_for_gemini missing")
+        context.user_data["awaiting_receipt_upload"] = False
         if os.path.exists(temp_path):
             os.remove(temp_path)
-            logger.info(f"Cleaned up temp file: {temp_path}")
-    except Exception as e:
-        logger.warning(f"Failed to clean up temp file {temp_path}: {e}")
+        return
+
+    # Run all processing in its own thread - completely independent from other users
+    logger.info(f"Dispatching receipt processing to independent thread for user {telegram_user_id}")
+    await run_user_processing_in_thread(
+        _process_receipt_async,
+        update,
+        context,
+        temp_path,
+        telegram_user_id,
+        internal_user_id,
+        expected_amount_for_gemini,
+        user
+    )
 
 async def cancel_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancel payment and delete pending enrollments"""
