@@ -255,7 +255,11 @@ Return ONLY the JSON object.
             
             # Generate response
             logger.debug(f"Sending to Gemini: {image_path}")
-            # Run Gemini in thread pool to avoid blocking
+            # Run Gemini in a separate thread to avoid blocking the asyncio event loop.
+            # The `run_in_executor` function runs the specified function in a separate
+            # thread, which prevents it from blocking the main asyncio event loop.
+            # This is the recommended way to run blocking I/O operations in an
+            # asyncio application.
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,  # Use default ThreadPoolExecutor

@@ -67,6 +67,11 @@ async def proceed_to_payment_callback(update: Update, context: ContextTypes.DEFA
     )
 
 
+import asyncio
+
+async def run_in_thread(func, *args):
+    return await asyncio.to_thread(func, *args)
+
 async def receipt_upload_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle receipt image/document uploads with comprehensive fraud detection and S3 storage"""
     
@@ -151,7 +156,8 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
     # ==================== STEP 1: GEMINI AI VALIDATION ====================
     logger.info(f"Starting Gemini validation for user {telegram_user_id}: expected_amount=${expected_amount_for_gemini}")
 
-    gemini_result = await validate_receipt_with_gemini_ai(
+    gemini_result = await run_in_thread(
+        validate_receipt_with_gemini_ai,
         temp_path,
         expected_amount_for_gemini,
         config.EXPECTED_ACCOUNTS
