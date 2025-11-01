@@ -68,27 +68,42 @@ async def proceed_to_payment_callback(update: Update, context: ContextTypes.DEFA
 
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
+# Create a dedicated thread pool executor for Gemini calls
+# This ensures Gemini processing doesn't block other bot operations
+_gemini_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="gemini-")
 
 async def run_in_thread(func, *args):
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, func, *args)
 
-def run_async_in_thread(async_func, *args):
+def _run_async_in_sync_context(async_func, *args):
     """
-    Run an async function in a separate thread with its own event loop.
+    Synchronous wrapper that runs an async function in its own event loop.
+    This is designed to be called from a thread executor.
+    """
+    # Create a new event loop for this thread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        # Run the async function in the new loop
+        return loop.run_until_complete(async_func(*args))
+    finally:
+        loop.close()
+
+async def run_gemini_in_thread(async_func, *args):
+    """
+    Run an async function (like Gemini validation) in a dedicated thread pool.
     This prevents blocking the main event loop for other users.
     """
-    def _wrapper():
-        # Create a new event loop for this thread
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            # Run the async function in the new loop
-            return loop.run_until_complete(async_func(*args))
-        finally:
-            loop.close()
-    
-    return _wrapper
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        _gemini_executor,
+        _run_async_in_sync_context,
+        async_func,
+        *args
+    )
 
 async def receipt_upload_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle receipt image/document uploads with comprehensive fraud detection and S3 storage"""
@@ -174,14 +189,14 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
     # ==================== STEP 1: GEMINI AI VALIDATION ====================
     logger.info(f"Starting Gemini validation for user {telegram_user_id}: expected_amount=${expected_amount_for_gemini}")
 
-    # Run Gemini validation in a separate thread to avoid blocking other users
-    gemini_wrapper = run_async_in_thread(
+    # Run Gemini validation in a dedicated thread pool to avoid blocking other users
+    # This uses a separate executor that won't interfere with the main event loop
+    gemini_result = await run_gemini_in_thread(
         validate_receipt_with_gemini_ai,
         temp_path,
         expected_amount_for_gemini,
         config.EXPECTED_ACCOUNTS
     )
-    gemini_result = await run_in_thread(gemini_wrapper)
     transaction_id = gemini_result.get('transaction_id')
     logger.info(f"🔍 DUPLICATE CHECK - Transaction ID extracted: '{transaction_id}' (type: {type(transaction_id)})")
     # Check for duplicate transaction ID
