@@ -1286,13 +1286,6 @@ ID: <code>{telegram_user_id}</code>
         else:
             logger.warning(f"Payment FAILED for user {telegram_user_id}: {result.get('reason')}, Fraud Score: {fraud_analysis['fraud_score']}")
         
-        # Send user notification
-        await update.message.reply_text(
-            payment_failed_message(result.get("reason", "Invalid receipt.")),
-            reply_markup=back_to_main_keyboard(),
-            parse_mode='HTML'
-        )
-        
         # Send admin notification with receipt image
         extracted_account = result.get('account_number', 'N/A')
         extracted_amount = result.get('amount', 0)
