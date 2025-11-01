@@ -152,6 +152,14 @@ def create_enrollment(session: Session, user_id: int, course_id: int,
     session.flush()
     return enrollment
 
+def get_enrollment_by_user_and_course(session: Session, user_id: int, course_id: int) -> Optional[Enrollment]:
+    """Get a specific enrollment for a user in a course."""
+    return session.query(Enrollment).filter(
+        Enrollment.user_id == user_id,
+        Enrollment.course_id == course_id
+    ).first()
+
+
 def get_user_enrollments(session: Session, user_id: int) -> List[Enrollment]:
     return session.query(Enrollment).filter(Enrollment.user_id == user_id).all()
 
