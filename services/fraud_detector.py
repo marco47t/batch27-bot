@@ -38,14 +38,29 @@ def calculate_consolidated_fraud_score(
         for indicator in tampering:
             fraud_indicators.append(f"Tampering: {indicator}")
     
-    # ✅ Old receipt penalty (days since transfer)
-    days_since_transfer = gemini_result.get("days_since_transfer")
-    if days_since_transfer and days_since_transfer > 5:
-        # Add 2 points per day after 5 days (max 20 points)
-        old_receipt_penalty = min(20, (days_since_transfer - 5) * 2)
-        fraud_score += old_receipt_penalty
-        fraud_indicators.append(f"Old receipt: {days_since_transfer} days since transfer (penalty: +{old_receipt_penalty} points)")
-        logger.warning(f"Old receipt detected: {days_since_transfer} days old, penalty: +{old_receipt_penalty}")
+    # Timezone-aware old receipt check (GMT+2)
+    submission_date_str = gemini_result.get("submission_date")
+    transfer_date_str = gemini_result.get("transfer_date")
+
+    if submission_date_str and transfer_date_str:
+        try:
+            # Assuming dates are in ISO format
+            submission_date = datetime.fromisoformat(submission_date_str)
+            transfer_date = datetime.fromisoformat(transfer_date_str)
+
+            # Calculate difference
+            time_difference = submission_date - transfer_date
+            days_difference = time_difference.days
+
+            if days_difference > 5:
+                # Add 10 points for each day over 5, max 50
+                penalty = min(50, (days_difference - 5) * 10)
+                fraud_score += penalty
+                fraud_indicators.append(f"Old receipt: {days_difference} days difference (penalty: +{penalty} points)")
+                logger.warning(f"Old receipt detected: {days_difference} days old, penalty: +{penalty}")
+
+        except (ValueError, TypeError) as e:
+            logger.error(f"Could not parse dates for fraud check: {e}")
     
     # === IMAGE FORENSICS (30 points) ===
     if image_forensics_result.get("is_forged"):

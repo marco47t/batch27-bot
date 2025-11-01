@@ -18,6 +18,7 @@ import tempfile
 import os
 from datetime import datetime 
 from typing import Optional
+import pytz
 def parse_transfer_datetime(gemini_result: dict) -> Optional[datetime]:
     """Parse date and time from Gemini result into datetime object"""
     date_str = gemini_result.get('date')  # "2025-10-22"
@@ -188,6 +189,12 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
         previous_receipt_paths=[e.receipt_image_path for e in enrollments_to_update if e.receipt_image_path]
     )
 
+    # Timezone-aware submission date (GMT+2)
+    egypt_tz = pytz.timezone('Africa/Cairo')
+    submission_date = datetime.now(egypt_tz)
+
+    gemini_result['submission_date'] = submission_date.isoformat()
+    gemini_result['transfer_date'] = transfer_datetime.isoformat() if transfer_datetime else None
     # Calculate final fraud score
     fraud_score = transaction_duplicate_check.get('fraud_score', 0)  # 50 if duplicate ID, 0 otherwise
     logger.info(f"💯 FRAUD SCORE CALCULATION - Initial score from duplicate check: {fraud_score}")

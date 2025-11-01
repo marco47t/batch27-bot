@@ -286,6 +286,10 @@ def my_courses_message(enrollments: list, pending_count: int = 0, selected_count
         message += "✅ الدورات المفعلة:\n"
         for e in verified:
             message += f"• {e.course.course_name}\n"
+            if e.course.telegram_group_link:
+                message += f"  🔗 رابط مجموعة التيليجرام: {e.course.telegram_group_link}\n"
+            if e.with_certificate and e.course.whatsapp_group_link:
+                message += f"  🔗 رابط مجموعة الواتساب: {e.course.whatsapp_group_link}\n"
         message += "\n"
     
     if pending:
