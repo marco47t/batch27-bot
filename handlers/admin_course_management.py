@@ -12,9 +12,9 @@ logger = logging.getLogger(__name__)
 
 # Conversation states
 (COURSE_NAME, COURSE_DESCRIPTION, COURSE_PRICE, COURSE_CERTIFICATE_PRICE,
-COURSE_GROUP_LINK, COURSE_MAX_STUDENTS, COURSE_START_DATE, COURSE_END_DATE,
+COURSE_WHATSAPP_LINK, COURSE_GROUP_LINK, COURSE_MAX_STUDENTS, COURSE_START_DATE, COURSE_END_DATE,
 COURSE_REG_OPEN_DATE, COURSE_REG_CLOSE_DATE, INSTRUCTOR_SELECT, COURSE_CONFIRM,  # ← ADD INSTRUCTOR_SELECT
-EDIT_SELECT_COURSE, EDIT_SELECT_FIELD, EDIT_INPUT_VALUE) = range(15) 
+EDIT_SELECT_COURSE, EDIT_SELECT_FIELD, EDIT_INPUT_VALUE) = range(16) 
 
 # ==================== /addcourse COMMAND ====================
 
@@ -129,6 +129,7 @@ async def course_group_link_input(update: Update, context: ContextTypes.DEFAULT_
         context.user_data['new_course']['group_link'] = group_link
         await update.message.reply_text(f"✅ الرابط: {group_link}")
     
+    # Now ask for max students
     await update.message.reply_text(
         f"الآن أدخل العدد الأقصى للطلاب (أو أرسل 0 لعدد غير محدود):\n"
         f"Now enter the maximum number of students (or send 0 for unlimited):\n\n"
@@ -138,6 +139,37 @@ async def course_group_link_input(update: Update, context: ContextTypes.DEFAULT_
     )
     
     return COURSE_MAX_STUDENTS
+
+async def course_whatsapp_link_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Receive course WhatsApp group link"""
+    if update.message.text.strip().lower() == '/skip':
+        context.user_data['new_course']['whatsapp_group_link'] = None
+        await update.message.reply_text("⏭️ تخطي رابط مجموعة الواتساب / Skipped WhatsApp group link")
+    else:
+        whatsapp_group_link = update.message.text.strip()
+        
+        # Basic validation
+        if not (whatsapp_group_link.startswith('https://chat.whatsapp.com/') or whatsapp_group_link.startswith('http://chat.whatsapp.com/')):
+            await update.message.reply_text(
+                "❌ رابط غير صالح. يجب أن يبدأ بـ https://chat.whatsapp.com/\n"
+                "Invalid link. Must start with https://chat.whatsapp.com/\n\n"
+                "Send /skip to skip."
+            )
+            return COURSE_WHATSAPP_LINK
+        
+        context.user_data['new_course']['whatsapp_group_link'] = whatsapp_group_link
+        await update.message.reply_text(f"✅ الرابط: {whatsapp_group_link}")
+    
+    # Now ask for Telegram group link
+    await update.message.reply_text(
+        f"الآن أدخل رابط مجموعة التليجرام (أو أرسل /skip لتخطي):\n"
+        f"Now enter the Telegram group link (or send /skip to skip):\n\n"
+        f"مثال / Example: https://t.me/yourgroup\n\n"
+        f"Send /cancel to abort.",
+        parse_mode='Markdown'
+    )
+    
+    return COURSE_GROUP_LINK
 
 async def course_max_students_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Receive max students"""
@@ -352,6 +384,7 @@ async def course_reg_close_date_input(update: Update, context: ContextTypes.DEFA
 
     💰 السعر / Price: {course_data['price']:.2f} SDG
     📜 سعر الشهادة / Certificate Price: {course_data.get('certificate_price', 0):.2f} SDG
+    🔗 رابط الواتساب / WhatsApp Link: {course_data.get('whatsapp_group_link') or 'لا يوجد / None'}
     🔗 رابط المجموعة / Group Link: {course_data.get('group_link') or 'لا يوجد / None'}
     👥 العدد الأقصى / Max Students: {course_data.get('max_students') or 'غير محدود / Unlimited'}
 
@@ -400,6 +433,7 @@ async def course_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
                 certificate_price=course_data.get('certificate_price', 0),
                 certificate_available=course_data.get('certificate_available', False),
                 telegram_group_link=course_data.get('group_link'),
+                whatsapp_group_link=course_data.get('whatsapp_group_link'), # NEW
                 max_students=course_data.get('max_students'),
                 start_date=course_data.get('start_date'),
                 end_date=course_data.get('end_date'),
@@ -541,6 +575,7 @@ async def edit_select_course_callback(update: Update, context: ContextTypes.DEFA
         [InlineKeyboardButton("📄 الوصف / Description", callback_data="edit_field_description")],
         [InlineKeyboardButton("💰 السعر / Price", callback_data="edit_field_price")],
         [InlineKeyboardButton("📜 سعر الشهادة / Certificate Price", callback_data="edit_field_cert_price")],
+        [InlineKeyboardButton("🔗 رابط الواتساب / WhatsApp Link", callback_data="edit_field_whatsapp_group")], # NEW
         [InlineKeyboardButton("👨‍🏫 المدرب / Instructor", callback_data="edit_field_instructor")],  # ← ADD THIS
         [InlineKeyboardButton("🔗 رابط المجموعة / Group Link", callback_data="edit_field_group")],
         [InlineKeyboardButton("👥 العدد الأقصى / Max Students", callback_data="edit_field_max")],
@@ -614,6 +649,7 @@ async def edit_select_field_callback(update: Update, context: ContextTypes.DEFAU
         'description': 'وصف الدورة / Description',
         'price': 'السعر / Price',
         'cert_price': 'سعر الشهادة / Certificate Price',
+        'whatsapp_group': 'رابط الواتساب / WhatsApp Link',
         'group': 'رابط المجموعة / Group Link',
         'max': 'العدد الأقصى / Max Students',
         'start': 'تاريخ البداية / Start Date',
@@ -658,6 +694,9 @@ async def edit_input_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
             elif field == 'group':
                 course.telegram_group_link = new_value if new_value.lower() != 'none' else None
+                
+            elif field == 'whatsapp_group':
+                course.whatsapp_group_link = new_value if new_value.lower() != 'none' else None
                 
             elif field == 'max':
                 max_val = int(new_value)
@@ -912,7 +951,7 @@ async def toggle_course_callback(update: Update, context: ContextTypes.DEFAULT_T
         )
 
 async def course_certificate_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Receive certificate price and move to instructor selection"""
+    """Receive certificate price and move to WhatsApp group link input"""
     try:
         certificate_price = float(update.message.text.strip())
         
@@ -927,13 +966,14 @@ async def course_certificate_price_input(update: Update, context: ContextTypes.D
         
         await update.message.reply_text(
             f"✅ سعر الشهادة: {certificate_price:.2f} SDG ({cert_status})\n\n"
-            f"الآن اختر المدرب للدورة...\n"
-            f"Now choose the instructor for the course...",
+            f"الآن أدخل رابط مجموعة الواتساب (للطلاب الذين يشترون شهادة):\n"
+            f"Now enter the WhatsApp group link (for students purchasing a certificate):\n\n"
+            f"Send /skip to skip this field.\n"
+            f"Send /cancel to abort.",
             parse_mode='Markdown'
         )
         
-        # Show instructor selection
-        return await select_course_instructor(update, context)
+        return COURSE_WHATSAPP_LINK # ← NEW STATE
     
     except ValueError:
         await update.message.reply_text("❌ السعر غير صالح. أدخل رقماً.\nInvalid price. Please enter a number.")
@@ -1022,16 +1062,16 @@ async def receive_instructor_selection(update: Update, context: ContextTypes.DEF
     # Skip group link (handled by group bot)
     context.user_data['new_course']['group_link'] = None
     
-    # Continue to max students
+    # Now ask for WhatsApp group link
     await query.message.reply_text(
-        "الآن أدخل العدد الأقصى للطلاب (أو أرسل 0 لعدد غير محدود):\n"
-        "Now enter the maximum number of students (or send 0 for unlimited):\n\n"
-        "مثال / Example: 50\n\n"
-        "Send /cancel to abort.",
+        f"الآن أدخل رابط مجموعة الواتساب (للطلاب الذين يشترون شهادة):\n"
+        f"Now enter the WhatsApp group link (for students purchasing a certificate):\n\n"
+        f"Send /skip to skip this field.\n"
+        f"Send /cancel to abort.",
         parse_mode='Markdown'
     )
     
-    return COURSE_MAX_STUDENTS
+    return COURSE_WHATSAPP_LINK
 
 
 async def edit_instructor_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

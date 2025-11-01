@@ -260,6 +260,8 @@ def main():
                 admin_course_management.COURSE_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_description_input)],
                 admin_course_management.COURSE_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_price_input)],
                 admin_course_management.COURSE_CERTIFICATE_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_certificate_price_input)],
+                admin_course_management.COURSE_WHATSAPP_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_whatsapp_link_input)],
+                admin_course_management.COURSE_GROUP_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_group_link_input)],
                 admin_course_management.COURSE_MAX_STUDENTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_max_students_input)],
                 admin_course_management.COURSE_START_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_start_date_input)],
                 admin_course_management.COURSE_END_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_end_date_input)],
@@ -425,6 +427,10 @@ def main():
         pattern='cancel_selected_pending'
     ))
     
+    application.add_handler(CallbackQueryHandler(
+        menu_handlers.my_links_callback,
+        pattern='my_links_menu'
+    ))
 
     # Add these handlers
     application.add_handler(CallbackQueryHandler(menu_handlers.my_course_detail_callback, pattern="^my_course_detail_"))

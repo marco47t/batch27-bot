@@ -170,6 +170,9 @@ def my_courses_selection_keyboard(pending_enrollments: List[Enrollment], selecte
         ]
         keyboard.append(action_buttons)
     
+    # My Links button
+    keyboard.append([InlineKeyboardButton("🔗 روابط المجموعات | Group Links", callback_data="my_links_menu")])
+
     # Back button
     keyboard.append([InlineKeyboardButton("→ العودة للقائمة الرئيسية", callback_data=CallbackPrefix.BACK_MAIN)])
     

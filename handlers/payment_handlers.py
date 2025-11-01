@@ -1348,7 +1348,7 @@ ID: {telegram_user_id}
 async def cancel_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancel payment and delete pending enrollments"""
     query = update.callback_query
-    await query.answer("🛑 Payment cancelled.")
+    await query.answer("🛑 تم إلغاء الدفع.")
     
     telegram_user_id = query.from_user.id
     
@@ -1379,9 +1379,9 @@ async def cancel_payment_callback(update: Update, context: ContextTypes.DEFAULT_
             logger.info(f"Cancelled {count} pending enrollments for user {telegram_user_id}")
             
         await query.edit_message_text(
-            f"🛑 **Payment Cancelled**\n\n"
-            f"Cancelled {count} pending enrollment(s).\n\n"
-            f"Use /start to return to main menu.",
+            f"🛑 **تم إلغاء الدفع**\n\n"
+            f"تم إلغاء {count} تسجيل(ات) معلقة.\n\n"
+            f"استخدم /start للعودة للقائمة الرئيسية.",
             parse_mode='Markdown',
             reply_markup=back_to_main_keyboard()
         )

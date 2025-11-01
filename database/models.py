@@ -62,6 +62,7 @@ class Course(Base):
     certificate_price = Column(Float, nullable=False, default=0)
     certificate_available = Column(Boolean, default=False, nullable=False)
     telegram_group_link = Column(String(500), nullable=True)
+    whatsapp_group_link = Column(String(500), nullable=True)  # WhatsApp link for certificate students
     telegram_group_id = Column(String(100), nullable=True)
     start_date = Column(DateTime, nullable=True)
     end_date = Column(DateTime, nullable=True)

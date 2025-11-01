@@ -446,6 +446,50 @@ async def my_course_detail_callback(update: Update, context: ContextTypes.DEFAUL
             parse_mode='Markdown'
         )
 
+async def my_links_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show user's registered course links"""
+    query = update.callback_query
+    await query.answer()
+    telegram_user_id = query.from_user.id
+
+    with get_db() as session:
+        db_user = crud.get_or_create_user(
+            session,
+            telegram_user_id=telegram_user_id,
+            username=query.from_user.username,
+            first_name=query.from_user.first_name,
+            last_name=query.from_user.last_name
+        )
+        internal_user_id = db_user.user_id
+
+        verified_enrollments = session.query(crud.Enrollment).options(
+            joinedload(crud.Enrollment.course)
+        ).filter(
+            crud.Enrollment.user_id == internal_user_id,
+            crud.Enrollment.payment_status == PaymentStatus.VERIFIED
+        ).all()
+
+        if not verified_enrollments:
+            await query.edit_message_text("❌ لا توجد لديك دورات مفعلة لعرض الروابط.", reply_markup=back_to_main_keyboard())
+            return
+
+        message = "🔗 **روابط دوراتك / Your Course Links**\n\n"
+        for enrollment in verified_enrollments:
+            course = enrollment.course
+            message += f"📚 **{course.course_name}**\n"
+            if course.telegram_group_link:
+                message += f"  📱 تليجرام: {course.telegram_group_link}\n"
+            if enrollment.with_certificate and course.whatsapp_group_link:
+                message += f"  💬 واتساب (مع شهادة): {course.whatsapp_group_link}\n"
+            message += "\n"
+
+        await query.edit_message_text(
+            message,
+            parse_mode='Markdown',
+            reply_markup=back_to_main_keyboard()
+        )
+
+
 
 async def complete_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle complete payment button"""
