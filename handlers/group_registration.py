@@ -169,6 +169,18 @@ async def send_course_invite_link(update: Update, context: ContextTypes.DEFAULT_
             logger.error(f"Course {course_id} not found")
             return False
         
+        # Get user to find enrollment
+        user = crud.get_user_by_telegram_id(session, telegram_user_id)
+        if not user:
+            logger.error(f"User with telegram_user_id {telegram_user_id} not found")
+            return False
+
+        # Get enrollment to check for certificate
+        enrollment = crud.get_enrollment_by_user_and_course(session, user.user_id, course_id)
+        if not enrollment:
+            logger.error(f"Enrollment not found for user {user.user_id} and course {course_id}")
+            # We can still proceed to send the telegram link
+            
         group_id = course.telegram_group_id
         
         # Case 1: No group configured at all
@@ -196,17 +208,30 @@ async def send_course_invite_link(update: Update, context: ContextTypes.DEFAULT_
             from html import escape
             safe_course_name = escape(course.course_name)
             
-            # Send fresh link to user with HTML formatting
-            await context.bot.send_message(
-                telegram_user_id,
+            message = (
                 f"🎉 <b>مبروك! تم قبول تسجيلك في دورة</b>\n"
                 f"📚 {safe_course_name}\n\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"📱 <b>انضم إلى مجموعة الدورة:</b>\n"
                 f"🔗 {invite_link.invite_link}\n\n"
+            )
+
+            if enrollment and enrollment.with_certificate and course.whatsapp_group_link:
+                message += (
+                    f"📱 <b>انضم إلى مجموعة الواتساب (خاص بالشهادة):</b>\n"
+                    f"🔗 {course.whatsapp_group_link}\n\n"
+                )
+
+            message += (
                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"✅ اضغط على الرابط وأرسل طلب انضمام\n"
-                f"⚡️ سيتم قبولك تلقائياً خلال ثوانٍ!",
+                f"⚡️ سيتم قبولك تلقائياً خلال ثوانٍ!"
+            )
+            
+            # Send fresh link to user with HTML formatting
+            await context.bot.send_message(
+                telegram_user_id,
+                message,
                 parse_mode='HTML'
             )
             
@@ -223,16 +248,29 @@ async def send_course_invite_link(update: Update, context: ContextTypes.DEFAULT_
                 from html import escape
                 safe_course_name = escape(course.course_name)
                 
-                await context.bot.send_message(
-                    telegram_user_id,
+                message = (
                     f"🎉 <b>مبروك! تم قبول تسجيلك في دورة</b>\n"
                     f"📚 {safe_course_name}\n\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n\n"
                     f"📱 <b>انضم إلى مجموعة الدورة:</b>\n"
                     f"🔗 {course.telegram_group_link}\n\n"
+                )
+
+                if enrollment and enrollment.with_certificate and course.whatsapp_group_link:
+                    message += (
+                        f"📱 <b>انضم إلى مجموعة الواتساب (خاص بالشهادة):</b>\n"
+                        f"🔗 {course.whatsapp_group_link}\n\n"
+                    )
+
+                message += (
                     f"━━━━━━━━━━━━━━━━━━━━\n\n"
                     f"💡 انقر على الرابط وأرسل طلب انضمام\n"
-                    f"⚡️ سيتم قبولك تلقائياً",
+                    f"⚡️ سيتم قبولك تلقائياً"
+                )
+                
+                await context.bot.send_message(
+                    telegram_user_id,
+                    message,
                     parse_mode='HTML'
                 )
                 return True
