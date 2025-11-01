@@ -1287,22 +1287,23 @@ ID: <code>{telegram_user_id}</code>
             log_user_action(telegram_user_id, "payment_success", f"enrollment_ids={enrollment_ids_str}, fraud_score={fraud_analysis['fraud_score']}")
         else:
             logger.warning(f"Payment FAILED for user {telegram_user_id}: {result.get('reason')}, Fraud Score: {fraud_analysis['fraud_score']}")
-        
-        # Send admin notification with receipt image
-        extracted_account = result.get('account_number', 'N/A')
-        extracted_amount = result.get('amount', 0)
-        extracted_currency = result.get('currency', 'SDG')
-        
-        # Get course names for admin notification
-        course_names = []
-        with get_db() as temp_session:
-            for eid in enrollment_ids_to_update:
-                enrollment = crud.get_enrollment_by_id(temp_session, eid)
-                if enrollment and enrollment.course:
-                    course_names.append(enrollment.course.course_name)
-        course_names_str = ", ".join(course_names) if course_names else "N/A"
-        
-        admin_caption = f"""
+            
+            # ✅ Only send admin notification when validation FAILED (not for successful validations)
+            # Send admin notification with receipt image
+            extracted_account = result.get('account_number', 'N/A')
+            extracted_amount = result.get('amount', 0)
+            extracted_currency = result.get('currency', 'SDG')
+            
+            # Get course names for admin notification
+            course_names = []
+            with get_db() as temp_session:
+                for eid in enrollment_ids_to_update:
+                    enrollment = crud.get_enrollment_by_id(temp_session, eid)
+                    if enrollment and enrollment.course:
+                        course_names.append(enrollment.course.course_name)
+            course_names_str = ", ".join(course_names) if course_names else "N/A"
+            
+            admin_caption = f"""
 🔴 Receipt Validation Failed
 
 👤 User: {user.first_name} {user.last_name or ''}
@@ -1324,37 +1325,37 @@ ID: {telegram_user_id}
 
 ⚠️ Action Required: Manual review recommended
 """
-        
-        try:
-            # Download from S3 if needed
-            if file_path.startswith('https://'):
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as download_temp:
-                    download_temp_path = download_temp.name
-                download_receipt_from_s3(file_path, download_temp_path)
-                photo_to_send = download_temp_path
-            else:
-                photo_to_send = file_path
             
-            with open(photo_to_send, "rb") as f:
-                await context.bot.send_photo(
-                    chat_id=config.ADMIN_CHAT_ID,
-                    photo=f,
-                    caption=admin_caption,
-                    reply_markup=failed_receipt_admin_keyboard(enrollment_ids_str, telegram_user_id),
-                    parse_mode='HTML'
+            try:
+                # Download from S3 if needed
+                if file_path.startswith('https://'):
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as download_temp:
+                        download_temp_path = download_temp.name
+                    download_receipt_from_s3(file_path, download_temp_path)
+                    photo_to_send = download_temp_path
+                else:
+                    photo_to_send = file_path
+                
+                with open(photo_to_send, "rb") as f:
+                    await context.bot.send_photo(
+                        chat_id=config.ADMIN_CHAT_ID,
+                        photo=f,
+                        caption=admin_caption,
+                        reply_markup=failed_receipt_admin_keyboard(enrollment_ids_str, telegram_user_id),
+                        parse_mode='HTML'
+                    )
+                
+                # Clean up downloaded temp file
+                if file_path.startswith('https://') and os.path.exists(photo_to_send):
+                    os.remove(photo_to_send)
+                
+                logger.info(f"Sent admin notification with image for user {telegram_user_id}")
+            except Exception as e:
+                logger.error(f"Failed to send admin notification for user {telegram_user_id}: {e}")
+                await send_admin_notification(
+                    context,
+                    f"Receipt validation failed for user {telegram_user_id}. File: {file_path}"
                 )
-            
-            # Clean up downloaded temp file
-            if file_path.startswith('https://') and os.path.exists(photo_to_send):
-                os.remove(photo_to_send)
-            
-            logger.info(f"Sent admin notification with image for user {telegram_user_id}")
-        except Exception as e:
-            logger.error(f"Failed to send admin notification for user {telegram_user_id}: {e}")
-            await send_admin_notification(
-                context,
-                f"Receipt validation failed for user {telegram_user_id}. File: {file_path}"
-            )
     
     except Exception as e:
         logger.error(f"Error processing receipt for user {telegram_user_id}: {e}", exc_info=True)
