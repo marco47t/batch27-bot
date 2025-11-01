@@ -881,55 +881,47 @@ ID: <code>{telegram_user_id}</code>
                 logger.info(f"Total remaining needed across all enrollments: {total_remaining_needed:.2f}")
                 
                 # ✅ DISTRIBUTE PAYMENT PROPORTIONALLY ACROSS ENROLLMENTS
-                transaction = None
                 remaining_to_distribute = extracted_amount
                 
+                # Fix: Remove nested loop - iterate only once
                 for idx, item in enumerate(enrollment_remaining_balances):
                     enrollment = item['enrollment']
                     enrollment_id = item['enrollment_id']
                     enrollment_remaining = item['remaining']
                     
                     # Calculate proportional amount
-                    for idx, item in enumerate(enrollment_remaining_balances):
-                        enrollment = item['enrollment']
-                        enrollment_remaining = item['remaining']
-                        
-                        # Calculate proportional amount
-                        if idx == len(enrollment_remaining_balances) - 1:
-                            amount_for_this_enrollment = remaining_to_distribute
-                        else:
-                            proportion = enrollment_remaining / total_remaining_needed
-                            amount_for_this_enrollment = extracted_amount * proportion
-                            remaining_to_distribute -= amount_for_this_enrollment
-                        
-                        # ✅ ADD THESE CRITICAL LINES:
-                        current_paid = enrollment.amount_paid or 0
-                        enrollment.amount_paid = current_paid + amount_for_this_enrollment
-                        
-                        # Check if complete
-                        if enrollment.amount_paid >= enrollment.payment_amount:
-                            enrollment.payment_status = PaymentStatus.VERIFIED
-                            enrollment.verification_date = datetime.now()
-                            logger.info(f"✅ Full payment reached for enrollment {enrollment.enrollment_id}")
-                        else:
-                            enrollment.payment_status = PaymentStatus.PENDING
-                            logger.info(f"⚠️ Still partial for enrollment {enrollment.enrollment_id}")
-                        
-                        # Store receipt path
-                        existing_receipts = enrollment.receipt_image_path
-                        if existing_receipts:
-                            enrollment.receipt_image_path = existing_receipts + "," + file_path
-                        else:
-                            enrollment.receipt_image_path = file_path
-                        
-                        logger.info(f"📝 Updated enrollment {enrollment.enrollment_id}: amount_paid={enrollment.amount_paid}")
+                    if idx == len(enrollment_remaining_balances) - 1:
+                        # Last enrollment gets the remainder to avoid rounding errors
+                        amount_for_this_enrollment = remaining_to_distribute
+                    else:
+                        proportion = enrollment_remaining / total_remaining_needed
+                        amount_for_this_enrollment = extracted_amount * proportion
+                        remaining_to_distribute -= amount_for_this_enrollment
+                    
+                    # ✅ Update amount_paid by adding the new payment
+                    current_paid = enrollment.amount_paid or 0
+                    enrollment.amount_paid = current_paid + amount_for_this_enrollment
+                    
+                    # Check if complete
+                    if enrollment.amount_paid >= enrollment.payment_amount:
+                        enrollment.payment_status = PaymentStatus.VERIFIED
+                        enrollment.verification_date = datetime.now()
+                        logger.info(f"✅ Full payment reached for enrollment {enrollment.enrollment_id}")
+                    else:
+                        enrollment.payment_status = PaymentStatus.PENDING
+                        logger.info(f"⚠️ Still partial for enrollment {enrollment.enrollment_id}: {enrollment.amount_paid:.2f}/{enrollment.payment_amount:.2f}")
+                    
+                    # Store receipt path (append if exists)
+                    existing_receipts = enrollment.receipt_image_path
+                    if existing_receipts:
+                        enrollment.receipt_image_path = existing_receipts + "," + file_path
+                    else:
+                        enrollment.receipt_image_path = file_path
+                    
+                    logger.info(f"📝 Updated enrollment {enrollment.enrollment_id}: amount_paid={enrollment.amount_paid:.2f} (added {amount_for_this_enrollment:.2f})")
                 
-                # ✅ FLUSH ONCE after loop ends
-                session.flush()
-                logger.info(f"💾 Committed all {len(enrollment_remaining_balances)} enrollment updates to database")
-                
-            # Create/update transaction
-            if not transaction:
+                # Create/update transaction within the same session
+                transaction = None
                 if resubmission_enrollment_id:
                     from database.models import Transaction
                     transaction = session.query(Transaction).filter(
@@ -979,26 +971,27 @@ ID: <code>{telegram_user_id}</code>
                     first_enrollment_id = enrollment_ids_to_update[0] if enrollment_ids_to_update else None
                     if first_enrollment_id:
                         transaction = crud.create_transaction(session, first_enrollment_id, file_path)
-                    transaction = crud.update_transaction(
-                        session,
-                        transaction.transaction_id,
-                        status=TransactionStatus.PENDING,
-                        receipt_image_path=file_path,
-                        extracted_account=result.get("account_number"),
-                        extracted_amount=extracted_amount,
-                        failure_reason=f"Partial payment: {extracted_amount:.0f}/{expected_amount_for_gemini:.0f} SDG. Remaining: {remaining_total:.0f} SDG",
-                        gemini_response=(result.get("raw_response") or "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}",
-                        fraud_score=fraud_analysis['fraud_score'],
-                        fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
-                        receipt_transaction_id=transaction_id,
-                        receipt_transfer_datetime=transfer_datetime,
-                        receipt_sender_name=gemini_result.get('sender_name'),
-                        receipt_amount=extracted_amount
-                    )
-
-            
-            # ✅ COMMIT CHANGES BEFORE CHECKING
-            session.commit()
+                        if transaction:
+                            transaction = crud.update_transaction(
+                                session,
+                                transaction.transaction_id,
+                                status=TransactionStatus.PENDING,
+                                receipt_image_path=file_path,
+                                extracted_account=result.get("account_number"),
+                                extracted_amount=extracted_amount,
+                                failure_reason=f"Partial payment: {extracted_amount:.0f}/{expected_amount_for_gemini:.0f} SDG. Remaining: {remaining_total:.0f} SDG",
+                                gemini_response=(result.get("raw_response") or "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}",
+                                fraud_score=fraud_analysis['fraud_score'],
+                                fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
+                                receipt_transaction_id=transaction_id,
+                                receipt_transfer_datetime=transfer_datetime,
+                                receipt_sender_name=gemini_result.get('sender_name'),
+                                receipt_amount=extracted_amount
+                            )
+                
+                # ✅ COMMIT CHANGES BEFORE CHECKING - MUST BE INSIDE SESSION CONTEXT
+                session.commit()
+                logger.info(f"💾 Committed all {len(enrollment_remaining_balances)} enrollment updates and transaction to database")
             
             # ✅ NOW CHECK IF ALL ENROLLMENTS ARE VERIFIED
             enrollment_ids = enrollment_ids_to_update  # ← ADD THIS LINE - use IDs from earlier, not detached objects
