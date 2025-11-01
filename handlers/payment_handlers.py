@@ -893,11 +893,10 @@ ID: <code>{telegram_user_id}</code>
                     for idx, item in enumerate(enrollment_remaining_balances):
                         enrollment = item['enrollment']
                         enrollment_id = item['enrollment_id']
-                        enrollment_remaining = item['remaining']
                         
-                        # ✅ Set amount_paid to EXTRACTED AMOUNT from receipt image
+                        # ✅ CORRECT: Set amount_paid to EXTRACTED AMOUNT from receipt
                         current_paid = enrollment.amount_paid or 0
-                        enrollment.amount_paid = current_paid + extracted_amount  # Accumulate total paid
+                        enrollment.amount_paid = current_paid + extracted_amount  # Add the actual extracted amount
                         
                         # Check if complete
                         if enrollment.amount_paid >= enrollment.payment_amount:
