@@ -193,18 +193,11 @@ async def send_course_invite_link(update: Update, context: ContextTypes.DEFAULT_
             )
             return False
         
-        # Case 2: Group exists - ALWAYS generate fresh invite link
-        try:
-            # Generate fresh invite link with join request (no member limit)
-            logger.info(f"🔄 Generating fresh invite link for user {telegram_user_id} to course {course_id}")
-            
-            invite_link = await context.bot.create_chat_invite_link(
-                chat_id=group_id,
-                creates_join_request=True,  # Requires join request (will be auto-approved)
-                name=f"Student {telegram_user_id} - {course.course_name[:20]}"  # Identifier for admin
-            )
-            
-            # Escape course name for HTML
+        # Case 2: Group link is configured - send it directly
+        if course.telegram_group_link:
+            invite_link = course.telegram_group_link
+            logger.info(f"Sending static group link to user {telegram_user_id} for course {course_id}")
+
             from html import escape
             safe_course_name = escape(course.course_name)
             
@@ -213,7 +206,7 @@ async def send_course_invite_link(update: Update, context: ContextTypes.DEFAULT_
                 f"📚 {safe_course_name}\n\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"📱 <b>انضم إلى مجموعة الدورة:</b>\n"
-                f"🔗 {invite_link.invite_link}\n\n"
+                f"🔗 {invite_link}\n\n"
             )
 
             if enrollment and enrollment.with_certificate and course.whatsapp_group_link:
@@ -227,61 +220,19 @@ async def send_course_invite_link(update: Update, context: ContextTypes.DEFAULT_
                 f"✅ اضغط على الرابط وأرسل طلب انضمام\n"
                 f"⚡️ سيتم قبولك تلقائياً خلال ثوانٍ!"
             )
-            
-            # Send fresh link to user with HTML formatting
+
             await context.bot.send_message(
-                telegram_user_id,
-                message,
+                chat_id=telegram_user_id,
+                text=message,
                 parse_mode='HTML'
             )
-            
-            logger.info(f"✅ Generated and sent fresh invite link for user {telegram_user_id}, course {course_id}")
             return True
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to create fresh invite link for group {group_id}: {e}")
-            
-            # Fallback: Try to use stored permanent link if available
-            if course.telegram_group_link:
-                logger.info(f"⚠️ Falling back to stored permanent link for course {course_id}")
-                
-                from html import escape
-                safe_course_name = escape(course.course_name)
-                
-                message = (
-                    f"🎉 <b>مبروك! تم قبول تسجيلك في دورة</b>\n"
-                    f"📚 {safe_course_name}\n\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                    f"📱 <b>انضم إلى مجموعة الدورة:</b>\n"
-                    f"🔗 {course.telegram_group_link}\n\n"
-                )
-
-                if enrollment and enrollment.with_certificate and course.whatsapp_group_link:
-                    message += (
-                        f"📱 <b>انضم إلى مجموعة الواتساب (خاص بالشهادة):</b>\n"
-                        f"🔗 {course.whatsapp_group_link}\n\n"
-                    )
-
-                message += (
-                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                    f"💡 انقر على الرابط وأرسل طلب انضمام\n"
-                    f"⚡️ سيتم قبولك تلقائياً"
-                )
-                
-                await context.bot.send_message(
-                    telegram_user_id,
-                    message,
-                    parse_mode='HTML'
-                )
-                return True
-            
-            # Complete failure - notify user
+        else:
+            # Case 3: Group ID is set, but static link is missing
+            logger.warning(f"Course {course_id} ({course.course_name}) has a group ID but is missing the telegram_group_link.")
             await context.bot.send_message(
                 telegram_user_id,
-                f"⚠️ <b>تم قبول تسجيلك في دورة</b>\n"
-                f"📚 {escape(course.course_name)}\n\n"
-                f"❌ لكن حدث خطأ في إنشاء رابط المجموعة.\n"
-                f"⏳ سيتم إرسال الرابط لك قريباً.",
+                f"✅ تم تأكيد تسجيلك في {course.course_name}!\n\n⚠️ رابط المجموعة غير م配置 حالياً. يرجى التواصل مع الإدارة.",
                 parse_mode='HTML'
             )
             return False

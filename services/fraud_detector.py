@@ -52,9 +52,9 @@ def calculate_consolidated_fraud_score(
             time_difference = submission_date - transfer_date
             days_difference = time_difference.days
 
-            if days_difference > 5:
-                # Add 10 points for each day over 5, max 50
-                penalty = min(50, (days_difference - 5) * 10)
+            if days_difference > 3:
+                # Add 40 points to fraud score for receipts older than 3 days
+                penalty = 40
                 fraud_score += penalty
                 fraud_indicators.append(f"Old receipt: {days_difference} days difference (penalty: +{penalty} points)")
                 logger.warning(f"Old receipt detected: {days_difference} days old, penalty: +{penalty}")
