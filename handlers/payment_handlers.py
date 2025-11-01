@@ -1,6 +1,7 @@
 # Stable version
 from datetime import datetime
 import json
+import threading
 from telegram import Update, InputFile
 from telegram.ext import ContextTypes
 from utils.keyboards import payment_upload_keyboard, back_to_main_keyboard, failed_receipt_admin_keyboard
@@ -1463,15 +1464,33 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
     # Run receipt processing - only Gemini runs in thread, everything else in main loop
     # This ensures Telegram API calls work correctly (they need the main event loop)
     logger.info(f"Starting receipt processing for user {telegram_user_id}")
-    await _process_receipt_async(
-        update,
-        context,
-        temp_path,
-        telegram_user_id,
-        internal_user_id,
-        expected_amount_for_gemini,
-        user
+    def run_receipt_processing():
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(
+                _process_receipt_async(
+                    update,
+                    context,
+                    temp_path,
+                    telegram_user_id,
+                    internal_user_id,
+                    expected_amount_for_gemini,
+                    user
+                )
+            )
+        finally:
+            loop.close()
+
+    thread = threading.Thread(
+        target=run_receipt_processing,
+        daemon=True,
+        name=f"ReceiptProcessor-{telegram_user_id}"
     )
+    thread.start()
+    logger.info(f"Receipt processing started in background thread for user {telegram_user_id}")
+
 
 async def cancel_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancel payment and delete pending enrollments"""
