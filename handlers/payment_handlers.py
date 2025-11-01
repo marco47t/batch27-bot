@@ -994,10 +994,10 @@ ID: <code>{telegram_user_id}</code>
 
             
             # ✅ COMMIT CHANGES BEFORE CHECKING
-            enrollment_ids = [e.enrollment_id for e in enrollments_to_update]
             session.commit()
             
             # ✅ NOW CHECK IF ALL ENROLLMENTS ARE VERIFIED
+            enrollment_ids = enrollment_ids_to_update  # ← ADD THIS LINE - use IDs from earlier, not detached objects
             with get_db() as new_session:
                 verified_enrollments = new_session.query(Enrollment).filter(
                     Enrollment.enrollment_id.in_(enrollment_ids)
