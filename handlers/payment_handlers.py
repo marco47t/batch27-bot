@@ -997,8 +997,10 @@ ID: <code>{telegram_user_id}</code>
             session.commit()
             
             # ✅ NOW CHECK IF ALL ENROLLMENTS ARE VERIFIED
-            all_verified = all(e.payment_status == PaymentStatus.VERIFIED for e in enrollments_to_update)
-            
+            verified_enrollments = session.query(Enrollment).filter(
+                Enrollment.enrollment_id.in_([e.enrollment_id for e in enrollments_to_update])
+            ).all()
+            all_verified = all(e.payment_status == PaymentStatus.VERIFIED for e in verified_enrollments)
             if all_verified:
                 logger.info(f"✅ Payment completed for user {telegram_user_id}")
                 
