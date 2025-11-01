@@ -538,3 +538,16 @@ Please send your message now and it will be forwarded to administration.
     
     context.user_data['awaiting_support_message'] = True
     logger.info(f"User {user.id} clicked contact admin button")
+
+async def follow_us_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle 'تابعونا' button from main menu"""
+    user = get_user_info(update)
+    log_user_action(user.id, "follow_us_button", "")
+    
+    from utils.messages import follow_us_message
+    
+    await update.message.reply_text(
+        follow_us_message(),
+        parse_mode='Markdown',
+        reply_markup=main_menu_reply_keyboard()
+    )

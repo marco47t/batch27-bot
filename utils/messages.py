@@ -732,3 +732,13 @@ No instructor assigned to this course
 {instructor.bio or 'لا توجد معلومات'}
 
 """
+
+def follow_us_message() -> str:
+    """Message with social media links"""
+    return """
+📲 روابطنا الرسمية:
+ واتساب :https://chat.whatsapp.com/Fcee5zswwbA0QZ7wSSj1PW?mode=ems_copy_t
+- تليجرام: https://t.me/SUST27  
+-فيسبوك:https://www.facebook.com/share/19EYfZViRT/
+-تيك توك:https://tiktok.com/@.2757411
+"""

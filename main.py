@@ -306,12 +306,22 @@ def main():
         menu_handlers.handle_my_courses_from_message
     ))
     application.add_handler(MessageHandler(
-        filters.Text(["3- حول البوت ℹ️"]), 
+        filters.Text(["3- حول البوت ℹ️"]),
         menu_handlers.handle_about_bot_message
     ))
 
     application.add_handler(MessageHandler(
-        filters.Regex("^3- تقييم دورة ⭐$"), 
+        filters.Text(["📞 التواصل مع الإدارة", "تابعونا 📲"]),
+        menu_handlers.contact_admin_text_handler
+    ))
+
+    application.add_handler(MessageHandler(
+        filters.Text(["تابعونا 📲"]),
+        menu_handlers.follow_us_callback
+    ))
+
+    application.add_handler(MessageHandler(
+        filters.Regex("^3- تقييم دورة ⭐$"),
         menu_handlers.rate_course_menu_handler
     ))
 
