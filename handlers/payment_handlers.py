@@ -157,8 +157,7 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
     # ==================== STEP 1: GEMINI AI VALIDATION ====================
     logger.info(f"Starting Gemini validation for user {telegram_user_id}: expected_amount=${expected_amount_for_gemini}")
 
-    gemini_result = await run_in_thread(
-        validate_receipt_with_gemini_ai,
+    gemini_result = await validate_receipt_with_gemini_ai(
         temp_path,
         expected_amount_for_gemini,
         config.EXPECTED_ACCOUNTS
