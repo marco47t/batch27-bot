@@ -249,9 +249,7 @@ async def course_instructor_callback(update: Update, context: ContextTypes.DEFAU
             await query.edit_message_text("❌ الدورة غير موجودة.")
             return
         
-        from utils.messages import course_instructor_details
-        from utils.keyboards import course_info_buttons_keyboard, review_instructor_keyboard
-        
+        # FIX: Use plain text instead of Markdown if instructor details has special characters
         message = course_instructor_details(course, session)
         
         # Build keyboard with rate button if instructor exists
@@ -260,7 +258,7 @@ async def course_instructor_callback(update: Update, context: ContextTypes.DEFAU
         if course.instructor:
             # Add rate instructor button
             keyboard_buttons.append([InlineKeyboardButton(
-                "⭐ قيّم المدرب | Rate Instructor", 
+                "⭐ قيّم المدرب | Rate Instructor",
                 callback_data=f"start_rate_{course.instructor.instructor_id}"
             )])
         
@@ -270,11 +268,22 @@ async def course_instructor_callback(update: Update, context: ContextTypes.DEFAU
             [InlineKeyboardButton("→ العودة للقائمة الرئيسية", callback_data=CallbackPrefix.BACK_MAIN)]
         ])
         
-        await query.edit_message_text(
-            message,
-            reply_markup=InlineKeyboardMarkup(keyboard_buttons),
-            parse_mode='Markdown'
-        )
+        try:
+            # Try with Markdown first
+            await query.edit_message_text(
+                message,
+                reply_markup=InlineKeyboardMarkup(keyboard_buttons),
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            # If Markdown fails, send without parse_mode
+            logger.error(f"Markdown parsing error for instructor details: {e}")
+            await query.edit_message_text(
+                message,
+                reply_markup=InlineKeyboardMarkup(keyboard_buttons),
+                parse_mode=None  # NO FORMATTING
+            )
+
 
 
 async def register_course_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
