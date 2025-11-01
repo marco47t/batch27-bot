@@ -67,6 +67,13 @@ def match_account_number(extracted_account: str, expected_accounts: list) -> tup
             best_confidence = max(best_confidence, 85)
             continue
         
+        # Check if extracted is contained in expected (rare but possible)
+        if cleaned in expected_clean:
+            logger.info(f"✅ Partial account match: {cleaned} in {expected_clean}")
+            matched = True
+            best_confidence = max(best_confidence, 85)
+            continue
+        
         # Check last 6 digits
         if len(cleaned) >= 6 and len(expected_clean) >= 6:
             if cleaned[-6:] == expected_clean[-6:]:
