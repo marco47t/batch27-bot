@@ -70,7 +70,8 @@ async def proceed_to_payment_callback(update: Update, context: ContextTypes.DEFA
 import asyncio
 
 async def run_in_thread(func, *args):
-    return await asyncio.to_thread(func, *args)
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, func, *args)
 
 async def receipt_upload_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle receipt image/document uploads with comprehensive fraud detection and S3 storage"""
