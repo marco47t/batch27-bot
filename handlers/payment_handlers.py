@@ -69,50 +69,50 @@ async def proceed_to_payment_callback(update: Update, context: ContextTypes.DEFA
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-import threading
 
-# Create a dedicated thread pool executor for user receipt processing
-# Each user gets their own thread, completely independent from others
-_user_processing_executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="user-receipt-")
+# Create a dedicated thread pool executor for Gemini calls
+# Each Gemini call runs in its own thread to avoid blocking other users
+_gemini_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="gemini-")
 
-async def run_in_thread(func, *args):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, func, *args)
-
-def _run_user_processing_in_thread(async_processing_func, *args):
+def _run_gemini_sync(image_path: str, expected_amount: float, expected_accounts: list):
     """
-    Run an async processing function in its own thread with its own event loop.
-    This ensures each user's receipt processing is completely isolated.
+    Run Gemini validation in a synchronous context (thread).
+    This function creates its own event loop in the thread.
     """
     # Create a new event loop for this thread
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        # Run the async function in the new loop
-        return loop.run_until_complete(async_processing_func(*args))
+        # Import here to avoid circular imports
+        from services.gemini_service import validate_receipt_with_gemini_ai
+        # Run the async Gemini function in the new loop
+        return loop.run_until_complete(
+            validate_receipt_with_gemini_ai(image_path, expected_amount, expected_accounts)
+        )
     finally:
         # Clean up the event loop
         loop.close()
 
-async def run_user_processing_in_thread(async_func, *args):
+async def run_gemini_in_thread(image_path: str, expected_amount: float, expected_accounts: list):
     """
-    Run user receipt processing in a dedicated thread with its own event loop.
-    Each user's processing runs completely independently, preventing any blocking.
+    Run Gemini validation in a dedicated thread pool.
+    This prevents blocking the main event loop for other users.
+    Returns the Gemini result directly.
     """
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
-        _user_processing_executor,
-        _run_user_processing_in_thread,
-        async_func,
-        *args
+        _gemini_executor,
+        _run_gemini_sync,
+        image_path,
+        expected_amount,
+        expected_accounts
     )
 
 async def _process_receipt_async(update: Update, context: ContextTypes.DEFAULT_TYPE, temp_path: str, 
                                   telegram_user_id: int, internal_user_id: int, expected_amount_for_gemini: float, user):
     """
-    Process receipt in its own thread - completely independent from other users.
-    This function runs all receipt processing logic (Gemini, fraud detection, DB updates, etc.)
-    in its own thread with its own event loop.
+    Process receipt in the main event loop - only Gemini runs in a thread.
+    All Telegram API calls stay in the main event loop to avoid "Event loop is closed" errors.
     """
     # Initialize variables for processing
     file_path = None
@@ -131,8 +131,9 @@ async def _process_receipt_async(update: Update, context: ContextTypes.DEFAULT_T
         # ==================== STEP 1: GEMINI AI VALIDATION ====================
         logger.info(f"Starting Gemini validation for user {telegram_user_id}: expected_amount=${expected_amount_for_gemini}")
 
-        # Run Gemini validation directly (already in its own thread)
-        gemini_result = await validate_receipt_with_gemini_ai(
+        # Run Gemini validation in a separate thread to avoid blocking other users
+        # This is the ONLY blocking operation that runs in a thread
+        gemini_result = await run_gemini_in_thread(
             temp_path,
             expected_amount_for_gemini,
             config.EXPECTED_ACCOUNTS
@@ -1410,10 +1411,10 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
             os.remove(temp_path)
         return
 
-    # Run all processing in its own thread - completely independent from other users
-    logger.info(f"Dispatching receipt processing to independent thread for user {telegram_user_id}")
-    await run_user_processing_in_thread(
-        _process_receipt_async,
+    # Run receipt processing - only Gemini runs in thread, everything else in main loop
+    # This ensures Telegram API calls work correctly (they need the main event loop)
+    logger.info(f"Starting receipt processing for user {telegram_user_id}")
+    await _process_receipt_async(
         update,
         context,
         temp_path,
