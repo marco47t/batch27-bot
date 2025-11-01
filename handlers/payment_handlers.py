@@ -892,20 +892,28 @@ ID: <code>{telegram_user_id}</code>
                     # Calculate proportional amount
                     for idx, item in enumerate(enrollment_remaining_balances):
                         enrollment = item['enrollment']
-                        enrollment_id = item['enrollment_id']
+                        enrollment_remaining = item['remaining']
                         
-                        # ✅ CORRECT: Set amount_paid to EXTRACTED AMOUNT from receipt
+                        # Calculate proportional amount
+                        if idx == len(enrollment_remaining_balances) - 1:
+                            amount_for_this_enrollment = remaining_to_distribute
+                        else:
+                            proportion = enrollment_remaining / total_remaining_needed
+                            amount_for_this_enrollment = extracted_amount * proportion
+                            remaining_to_distribute -= amount_for_this_enrollment
+                        
+                        # ✅ ADD THESE CRITICAL LINES:
                         current_paid = enrollment.amount_paid or 0
-                        enrollment.amount_paid = current_paid + extracted_amount  # Add the actual extracted amount
+                        enrollment.amount_paid = current_paid + amount_for_this_enrollment
                         
                         # Check if complete
                         if enrollment.amount_paid >= enrollment.payment_amount:
                             enrollment.payment_status = PaymentStatus.VERIFIED
                             enrollment.verification_date = datetime.now()
-                            logger.info(f"✅ Full payment reached for enrollment {enrollment_id}")
+                            logger.info(f"✅ Full payment reached for enrollment {enrollment.enrollment_id}")
                         else:
                             enrollment.payment_status = PaymentStatus.PENDING
-                            logger.info(f"⚠️ Still partial for enrollment {enrollment_id}")
+                            logger.info(f"⚠️ Still partial for enrollment {enrollment.enrollment_id}")
                         
                         # Store receipt path
                         existing_receipts = enrollment.receipt_image_path
@@ -914,7 +922,7 @@ ID: <code>{telegram_user_id}</code>
                         else:
                             enrollment.receipt_image_path = file_path
                         
-                        logger.info(f"📝 Updated enrollment {enrollment_id}: amount_paid={enrollment.amount_paid}, status={enrollment.payment_status}")
+                        logger.info(f"📝 Updated enrollment {enrollment.enrollment_id}: amount_paid={enrollment.amount_paid}")
                 
                 # ✅ FLUSH ONCE after loop ends
                 session.flush()
