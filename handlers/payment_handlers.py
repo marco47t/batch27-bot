@@ -1000,23 +1000,17 @@ ID: <code>{telegram_user_id}</code>
             all_verified = all(e.payment_status == PaymentStatus.VERIFIED for e in enrollments_to_update)
             
             if all_verified:
-                # PAYMENT COMPLETE! Send group invites ONLY (no redundant success message)
                 logger.info(f"✅ Payment completed for user {telegram_user_id}")
                 
+                # Send SUCCESS message FIRST
+                success_msg = "✅ تم التحقق من الإيصال وإضافة المبلغ!\n📊 تم تفعيل التسجيل في الدورات"
+                await update.message.reply_text(success_msg, parse_mode='Markdown', reply_markup=back_to_main_keyboard())
+                
+                # THEN send group invites
                 from handlers.group_registration import send_course_invite_link
-                
-                # ✅ DELETE PROCESSING MESSAGE FIRST
-                try:
-                    if update.message:
-                        await update.message.delete()
-                except Exception as e:
-                    logger.warning(f"Could not delete processing message: {e}")
-                
-                # Send group invites (this function sends its own message with the link)
                 for e in enrollments_to_update:
                     if e.course:
                         await send_course_invite_link(update, context, telegram_user_id, e.course.course_id)
-                
                 # Clean up context
                 context.user_data["awaiting_receipt_upload"] = False
                 context.user_data.pop("cart_total_for_payment", None)
