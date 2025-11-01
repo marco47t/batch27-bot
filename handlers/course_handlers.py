@@ -138,7 +138,10 @@ async def course_detail_callback(update: Update, context: ContextTypes.DEFAULT_T
     logger.info(f"User {user_id} viewing details for course {course_id}")
     
     with get_db() as session:
-        course = crud.get_course_by_id(session, course_id)
+        courses = crud.get_all_courses(session)
+        courses.sort(key=lambda c: c.course_name) # Ensure consistent order
+        
+        course = next((c for c in courses if c.course_id == course_id), None)
         
         if not course:
             logger.warning(f"Course {course_id} not found for user {user_id}")
@@ -147,6 +150,8 @@ async def course_detail_callback(update: Update, context: ContextTypes.DEFAULT_T
                 reply_markup=back_to_main_keyboard()
             )
             return
+        
+        current_course_index = courses.index(course)
         
         # Get enrollment count
         enrollment_count = session.query(crud.Enrollment).filter(
@@ -161,7 +166,7 @@ async def course_detail_callback(update: Update, context: ContextTypes.DEFAULT_T
         # Show BRIEF summary instead of full details
         await query.edit_message_text(
             course_summary_message(course, enrollment_count),
-            reply_markup=course_info_buttons_keyboard(course_id),
+            reply_markup=course_info_buttons_keyboard(course_id, courses, current_course_index),
             parse_mode='Markdown'
         )
 
@@ -176,11 +181,16 @@ async def course_description_callback(update: Update, context: ContextTypes.DEFA
     course_id = int(query.data.split('_')[-1])
     
     with get_db() as session:
-        course = crud.get_course_by_id(session, course_id)
+        courses = crud.get_all_courses(session)
+        courses.sort(key=lambda c: c.course_name)
+        
+        course = next((c for c in courses if c.course_id == course_id), None)
         
         if not course:
             await query.edit_message_text("❌ الدورة غير موجودة.")
             return
+            
+        current_course_index = courses.index(course)
         
         from utils.messages import course_description_details
         from utils.keyboards import course_info_buttons_keyboard
@@ -189,7 +199,7 @@ async def course_description_callback(update: Update, context: ContextTypes.DEFA
         
         await query.edit_message_text(
             message,
-            reply_markup=course_info_buttons_keyboard(course_id),
+            reply_markup=course_info_buttons_keyboard(course_id, courses, current_course_index),
             parse_mode='Markdown'
         )
 
@@ -204,24 +214,23 @@ async def course_dates_callback(update: Update, context: ContextTypes.DEFAULT_TY
     course_id = int(query.data.split('_')[-1])
     
     with get_db() as session:
-        course = crud.get_course_by_id(session, course_id)
+        courses = crud.get_all_courses(session)
+        courses.sort(key=lambda c: c.course_name)
+        
+        course = next((c for c in courses if c.course_id == course_id), None)
         
         if not course:
             await query.edit_message_text("❌ الدورة غير موجودة.")
             return
-        
-        # Get enrollment count
-        enrollment_count = session.query(crud.Enrollment).filter(
-            crud.Enrollment.course_id == course_id,
-            crud.Enrollment.payment_status == PaymentStatus.VERIFIED
-        ).count()
+            
+        current_course_index = courses.index(course)
         
         from utils.messages import course_dates_details
         from utils.keyboards import course_info_buttons_keyboard
         
         await query.edit_message_text(
             course_dates_details(course),
-            reply_markup=course_info_buttons_keyboard(course_id),
+            reply_markup=course_info_buttons_keyboard(course_id, courses, current_course_index),
             parse_mode='Markdown'
         )
 

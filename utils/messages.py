@@ -595,47 +595,18 @@ Click buttons below to view details:
 
 
 def course_description_details(course, session) -> str:
-    """Show course description with full instructor profile"""
+    """Show course description without instructor profile"""
     description = course.description or "لا يوجد وصف متاح\nNo description available"
     
-    # Instructor profile section
-    instructor_section = ""
-    if course.instructor:
-        from database import crud
-        
-        instructor = course.instructor  # Already loaded via relationship
-        avg_rating = crud.get_instructor_average_rating(session, instructor.instructor_id)
-        review_count = len(crud.get_instructor_reviews(session, instructor.instructor_id))
-        
-        rating_display = ""
-        if avg_rating:
-            stars = "⭐" * int(avg_rating)
-            rating_display = f"{stars} {avg_rating}/5 ({review_count} تقييم)"
-        else:
-            rating_display = "لا توجد تقييمات بعد"
-        
-        instructor_section = f"""
-
-━━━━━━━━━━━━━━━━━━━━
-👨‍🏫 **معلومات المدرب**
-**Instructor Info**
-
-**الاسم:** {instructor.name}
-📚 **التخصص:** {instructor.specialization or 'غير محدد'}
-⭐ **التقييم:** {rating_display}
-
-**نبذة:**
-{instructor.bio or 'لا توجد معلومات'}"""
-    
-    return f"""📋 **وصف الدورة**
-**Course Description**
+    return f"""📋 **المحتويات**
+**Course Contents**
 ━━━━━━━━━━━━━━━━━━━━
 
 📚 {course.course_name}
 
 {description}
 
-💰 السعر: {course.price:.0f} جنيه سوداني{instructor_section}
+💰 السعر: {course.price:.0f} جنيه سوداني
 """
 
 

@@ -269,16 +269,33 @@ def certificate_option_keyboard(course_id: int, register_flow: bool = False) -> 
 
 # ADD this NEW function to keyboards.py
 
-def course_info_buttons_keyboard(course_id: int) -> InlineKeyboardMarkup:
-    """Button menu for course details - ALWAYS show all buttons"""
+def course_info_buttons_keyboard(course_id: int, courses: list, current_course_index: int) -> InlineKeyboardMarkup:
+    """Button menu for course details with pagination"""
+    
+    # Navigation buttons
+    nav_buttons = []
+    if current_course_index > 0:
+        prev_course_id = courses[current_course_index - 1].course_id
+        nav_buttons.append(InlineKeyboardButton("◀️ السابق", callback_data=f"course_detail_{prev_course_id}"))
+    
+    if current_course_index < len(courses) - 1:
+        next_course_id = courses[current_course_index + 1].course_id
+        nav_buttons.append(InlineKeyboardButton("التالي ▶️", callback_data=f"course_detail_{next_course_id}"))
+
     keyboard = [
-        [InlineKeyboardButton("📋 الوصف | Description", callback_data=f"course_desc_{course_id}")],
+        [InlineKeyboardButton("📋 المحتويات | Contents", callback_data=f"course_desc_{course_id}")],
         [InlineKeyboardButton("👨🏫 المدرب | Instructor", callback_data=f"course_instructor_{course_id}")],
         [InlineKeyboardButton("📅 التواريخ | Dates", callback_data=f"course_dates_{course_id}")],
+    ]
+
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+
+    keyboard.extend([
         [InlineKeyboardButton("✍️ التسجيل في الدورة | Register", callback_data=f"register_course_{course_id}")],
         [InlineKeyboardButton("→ عودة لقائمة الدورات", callback_data="course_details_menu")],
         [InlineKeyboardButton("→ العودة للقائمة الرئيسية", callback_data=CallbackPrefix.BACK_MAIN)]
-    ]
+    ])
     
     return InlineKeyboardMarkup(keyboard)
 
