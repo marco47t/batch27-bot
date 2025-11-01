@@ -14,6 +14,7 @@ from utils.keyboards import (
     courses_menu_keyboard
 )
 from utils.messages import (
+    course_instructor_details,
     course_list_message, 
     cart_message, 
     error_message,

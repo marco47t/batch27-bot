@@ -703,7 +703,9 @@ def course_instructor_details(course, session) -> str:
         return """👨🏫 **معلومات المدرب**
 **Instructor Info**
 
+
 ━━━━━━━━━━━━━━━━━━━━
+
 
 ❌ لا يوجد مدرب مخصص لهذه الدورة
 No instructor assigned to this course
@@ -721,21 +723,33 @@ No instructor assigned to this course
     else:
         rating_display = "لا توجد تقييمات بعد"
     
-    return f"""👨🏫 **معلومات المدرب**
-**Instructor Info**
+    # FIX: Remove Markdown from instructor.bio if it has special characters
+    bio_text = instructor.bio or "لا توجد معلومات"
+    # Clean any potential problematic markdown
+    bio_text = bio_text.replace("**", "").replace("__", "").replace("*", "")
+    
+    return f"""👨🏫 معلومات المدرب
+Instructor Info
+
 
 ━━━━━━━━━━━━━━━━━━━━
 
-**الاسم:** {instructor.name}
 
-📚 **التخصص:** {instructor.specialization or 'غير محدد'}
+الاسم: {instructor.name}
 
-⭐ **التقييم:** {rating_display}
 
-**نبذة:**
-{instructor.bio or 'لا توجد معلومات'}
+📚 التخصص: {instructor.specialization or 'غير محدد'}
+
+
+⭐ التقييم: {rating_display}
+
+
+نبذة:
+{bio_text}
+
 
 """
+
 
 def follow_us_message() -> str:
     """Message with social media links"""
