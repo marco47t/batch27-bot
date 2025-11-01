@@ -136,7 +136,7 @@ async def _process_receipt_async(update: Update, context: ContextTypes.DEFAULT_T
         gemini_result = await validate_receipt_with_gemini_ai(
             temp_path,
             expected_amount_for_gemini,
-            config.BANK_ACCOUNT_NUMBERS,
+            config.EXPECTED_ACCOUNTS,
             user_id=telegram_user_id  # ✅ NEW: Enable per-user threading
         )
         transaction_id = gemini_result.get('transaction_id')
