@@ -396,26 +396,47 @@ async def _process_receipt_async(update: Update, context: ContextTypes.DEFAULT_T
         if fraud_analysis["recommendation"] == "REJECT":
             logger.warning(f"Receipt REJECTED for user {telegram_user_id}: Fraud detected with score {fraud_analysis['fraud_score']}")
             
-            # Update transaction as rejected with fraud data
-            transaction = None
-            for enrollment in enrollments_to_update:
-                crud.update_enrollment_status(
-                    session,
-                    enrollment.enrollment_id,
-                    PaymentStatus.FAILED,
-                    receipt_path=file_path,
-                    admin_notes=f"FRAUD DETECTED (Score: {fraud_analysis['fraud_score']}): " + "; ".join(fraud_analysis["fraud_indicators"][:2])
-                )
-                logger.info(f"Updated enrollment {enrollment.enrollment_id} status to FAILED (fraud)")
-                
-                if not transaction:
-                    if resubmission_enrollment_id:
-                        from database.models import Transaction
-                        transaction = session.query(Transaction).filter(
-                            Transaction.enrollment_id == resubmission_enrollment_id
-                        ).order_by(Transaction.submitted_date.desc()).first()
-                        
-                        if transaction:
+            # Use a new session since the previous one closed
+            with get_db() as session:
+                # Update transaction as rejected with fraud data
+                transaction = None
+                for enrollment_id in enrollment_ids_to_update:
+                    crud.update_enrollment_status(
+                        session,
+                        enrollment_id,
+                        PaymentStatus.FAILED,
+                        receipt_path=file_path,
+                        admin_notes=f"FRAUD DETECTED (Score: {fraud_analysis['fraud_score']}): " + "; ".join(fraud_analysis["fraud_indicators"][:2])
+                    )
+                    logger.info(f"Updated enrollment {enrollment_id} status to FAILED (fraud)")
+                    
+                    if not transaction:
+                        if resubmission_enrollment_id:
+                            from database.models import Transaction
+                            transaction = session.query(Transaction).filter(
+                                Transaction.enrollment_id == resubmission_enrollment_id
+                            ).order_by(Transaction.submitted_date.desc()).first()
+                            
+                            if transaction:
+                                transaction = crud.update_transaction(
+                                    session,
+                                    transaction.transaction_id,
+                                    status=TransactionStatus.REJECTED,
+                                    receipt_image_path=file_path,
+                                    extracted_account=gemini_result.get("account_number"),
+                                    extracted_amount=gemini_result.get("amount"),
+                                    failure_reason=f"FRAUD DETECTED: " + "; ".join(fraud_analysis["fraud_indicators"]),
+                                    gemini_response=str(fraud_analysis),
+                                    fraud_score=fraud_analysis['fraud_score'],
+                                    fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
+                                    receipt_transaction_id=transaction_id,
+                                    receipt_transfer_datetime=transfer_datetime,
+
+                                    receipt_sender_name=gemini_result.get('sender_name'),
+                                    receipt_amount=gemini_result.get('amount')
+                                )
+                        else:
+                            transaction = crud.create_transaction(session, enrollment_id, file_path)
                             transaction = crud.update_transaction(
                                 session,
                                 transaction.transaction_id,
@@ -429,30 +450,11 @@ async def _process_receipt_async(update: Update, context: ContextTypes.DEFAULT_T
                                 fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
                                 receipt_transaction_id=transaction_id,
                                 receipt_transfer_datetime=transfer_datetime,
-
                                 receipt_sender_name=gemini_result.get('sender_name'),
                                 receipt_amount=gemini_result.get('amount')
                             )
-                    else:
-                        transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
-                        transaction = crud.update_transaction(
-                            session,
-                            transaction.transaction_id,
-                            status=TransactionStatus.REJECTED,
-                            receipt_image_path=file_path,
-                            extracted_account=gemini_result.get("account_number"),
-                            extracted_amount=gemini_result.get("amount"),
-                            failure_reason=f"FRAUD DETECTED: " + "; ".join(fraud_analysis["fraud_indicators"]),
-                            gemini_response=str(fraud_analysis),
-                            fraud_score=fraud_analysis['fraud_score'],
-                            fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
-                            receipt_transaction_id=transaction_id,
-                            receipt_transfer_datetime=transfer_datetime,
-                            receipt_sender_name=gemini_result.get('sender_name'),
-                            receipt_amount=gemini_result.get('amount')
-                        )
-            
-            session.commit()
+                
+                session.commit()
 
             
             # Build detailed rejection message for user
@@ -479,10 +481,14 @@ If you have any questions, please contact administration.
             await update.message.reply_text(rejection_msg, reply_markup=back_to_main_keyboard(), parse_mode='HTML')
             
             # Send detailed admin alert with fraud analysis
+            # Fetch course names using enrollment IDs (session was closed)
             course_names = []
-            for enrollment in enrollments_to_update:
-                if enrollment.course:
-                    course_names.append(enrollment.course.course_name)
+            with get_db() as session_for_courses:
+                from database.models import Course, Enrollment
+                for enrollment_id in enrollment_ids_to_update:
+                    enrollment = session_for_courses.query(Enrollment).filter(Enrollment.enrollment_id == enrollment_id).first()
+                    if enrollment and enrollment.course:
+                        course_names.append(enrollment.course.course_name)
             course_names_str = ", ".join(course_names) if course_names else "N/A"
             
             admin_msg = f"""
@@ -616,30 +622,32 @@ ID: <code>{telegram_user_id}</code>
         elif fraud_analysis["recommendation"] == "MANUAL_REVIEW":
             logger.warning(f"Receipt flagged for MANUAL REVIEW for user {telegram_user_id}: Score {fraud_analysis['fraud_score']}")
             
-            # Update as pending review
-            transaction = None
-            for enrollment in enrollments_to_update:
-                crud.update_enrollment_status(
-                    session,
-                    enrollment.enrollment_id,
-                    PaymentStatus.PENDING,
-                    receipt_path=file_path,
-                    admin_notes=f"MANUAL REVIEW REQUIRED (Score: {fraud_analysis['fraud_score']}): " + "; ".join(fraud_analysis["fraud_indicators"][:2])
-                )
-                logger.info(f"Updated enrollment {enrollment.enrollment_id} status to PENDING (manual review)")
-                
-                if not transaction:
-                    if resubmission_enrollment_id:
-                        from database.models import Transaction
-                        transaction = session.query(Transaction).filter(
-                            Transaction.enrollment_id == resubmission_enrollment_id
-                       ).order_by(Transaction.submitted_date.desc()).first()
-                        
-                        if transaction:
-                            transaction = crud.update_transaction(
-                                session,
-                                transaction.transaction_id,
-                                status=TransactionStatus.PENDING,
+            # Use a new session since the previous one closed
+            with get_db() as session:
+                # Update as pending review
+                transaction = None
+                for enrollment_id in enrollment_ids_to_update:
+                    crud.update_enrollment_status(
+                        session,
+                        enrollment_id,
+                        PaymentStatus.PENDING,
+                        receipt_path=file_path,
+                        admin_notes=f"MANUAL REVIEW REQUIRED (Score: {fraud_analysis['fraud_score']}): " + "; ".join(fraud_analysis["fraud_indicators"][:2])
+                    )
+                    logger.info(f"Updated enrollment {enrollment_id} status to PENDING (manual review)")
+                    
+                    if not transaction:
+                        if resubmission_enrollment_id:
+                            from database.models import Transaction
+                            transaction = session.query(Transaction).filter(
+                                Transaction.enrollment_id == resubmission_enrollment_id
+                            ).order_by(Transaction.submitted_date.desc()).first()
+                            
+                            if transaction:
+                                transaction = crud.update_transaction(
+                                    session,
+                                    transaction.transaction_id,
+                                    status=TransactionStatus.PENDING,
                                 receipt_image_path=file_path,
                                 extracted_account=gemini_result.get("account_number"),
                                 extracted_amount=gemini_result.get("amount"),
@@ -653,7 +661,7 @@ ID: <code>{telegram_user_id}</code>
                                 receipt_amount=gemini_result.get('amount')
                             )
                         else:
-                            transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
+                            transaction = crud.create_transaction(session, enrollment_id, file_path)
                             transaction = crud.update_transaction(
                                 session,
                                 transaction.transaction_id,
@@ -671,7 +679,7 @@ ID: <code>{telegram_user_id}</code>
                                 receipt_amount=gemini_result.get('amount')
                             )
                     else:
-                        transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
+                        transaction = crud.create_transaction(session, enrollment_id, file_path)
                         transaction = crud.update_transaction(
                             session,
                             transaction.transaction_id,
@@ -709,10 +717,14 @@ ID: <code>{telegram_user_id}</code>
             await update.message.reply_text(review_msg, reply_markup=back_to_main_keyboard(), parse_mode='HTML')
             
             # Send admin notification for manual review
+            # Fetch course names using enrollment IDs (session was closed)
             course_names = []
-            for enrollment in enrollments_to_update:
-                if enrollment.course:
-                    course_names.append(enrollment.course.course_name)
+            with get_db() as session_for_courses:
+                from database.models import Course, Enrollment
+                for enrollment_id in enrollment_ids_to_update:
+                    enrollment = session_for_courses.query(Enrollment).filter(Enrollment.enrollment_id == enrollment_id).first()
+                    if enrollment and enrollment.course:
+                        course_names.append(enrollment.course.course_name)
             course_names_str = ", ".join(course_names) if course_names else "N/A"
             
             review_admin_msg = f"""
@@ -834,70 +846,81 @@ ID: <code>{telegram_user_id}</code>
             remaining_total = expected_amount_for_gemini - extracted_amount
             logger.info(f"⚠️ Partial payment detected for user {telegram_user_id}: paid {extracted_amount:.0f}, expected {expected_amount_for_gemini:.0f}, remaining {remaining_total:.0f}")
             
-            # Get course names for notifications
+            # Get course names for notifications (need new session)
             course_names = []
-            for enrollment in enrollments_to_update:
-                if enrollment.course:
-                    course_names.append(enrollment.course.course_name)
+            with get_db() as session_for_courses:
+                from database.models import Course, Enrollment
+                for enrollment_id in enrollment_ids_to_update:
+                    enrollment = session_for_courses.query(Enrollment).filter(Enrollment.enrollment_id == enrollment_id).first()
+                    if enrollment and enrollment.course:
+                        course_names.append(enrollment.course.course_name)
             course_names_str = ", ".join(course_names) if course_names else "N/A"
             
-            # ✅ CALCULATE REMAINING BALANCE FOR EACH ENROLLMENT
-            enrollment_remaining_balances = []
-            total_remaining_needed = 0
-            
-            for enrollment in enrollments_to_update:
-                current_paid = enrollment.amount_paid or 0
-                remaining_for_this = enrollment.payment_amount - current_paid
-                enrollment_remaining_balances.append({
-                    'enrollment': enrollment,
-                    'remaining': remaining_for_this
-                })
-                total_remaining_needed += remaining_for_this
-            
-            logger.info(f"Total remaining needed across all enrollments: {total_remaining_needed:.2f}")
-            
-            # ✅ DISTRIBUTE PAYMENT PROPORTIONALLY ACROSS ENROLLMENTS
-            transaction = None
-            remaining_to_distribute = extracted_amount
-            
-            for idx, item in enumerate(enrollment_remaining_balances):
-                enrollment = item['enrollment']
-                enrollment_remaining = item['remaining']
+            # ✅ CALCULATE REMAINING BALANCE FOR EACH ENROLLMENT AND DISTRIBUTE PAYMENT
+            # Use a new session for partial payment processing
+            with get_db() as session:
+                from database.models import Enrollment
+                enrollment_remaining_balances = []
+                total_remaining_needed = 0
                 
-                # Calculate proportional amount
-                if idx == len(enrollment_remaining_balances) - 1:
-                    amount_for_this_enrollment = remaining_to_distribute
-                else:
-                    proportion = enrollment_remaining / total_remaining_needed
-                    amount_for_this_enrollment = extracted_amount * proportion
-                    remaining_to_distribute -= amount_for_this_enrollment
+                # Fetch enrollments fresh from database
+                for enrollment_id in enrollment_ids_to_update:
+                    enrollment = session.query(Enrollment).filter(Enrollment.enrollment_id == enrollment_id).first()
+                    if enrollment:
+                        current_paid = enrollment.amount_paid or 0
+                        remaining_for_this = enrollment.payment_amount - current_paid
+                        enrollment_remaining_balances.append({
+                            'enrollment': enrollment,
+                            'enrollment_id': enrollment_id,
+                            'remaining': remaining_for_this
+                        })
+                        total_remaining_needed += remaining_for_this
                 
-                # Apply payment
-                current_paid = enrollment.amount_paid or 0
-                enrollment.amount_paid = current_paid + amount_for_this_enrollment
+                logger.info(f"Total remaining needed across all enrollments: {total_remaining_needed:.2f}")
                 
-                # Check if complete
-                if enrollment.amount_paid >= enrollment.payment_amount:
-                    enrollment.payment_status = PaymentStatus.VERIFIED
-                    enrollment.verification_date = datetime.now()
-                    logger.info(f"✅ Full payment reached for enrollment {enrollment.enrollment_id}")
-                else:
-                    enrollment.payment_status = PaymentStatus.PENDING
-                    logger.info(f"⚠️ Still partial for enrollment {enrollment.enrollment_id}")
+                # ✅ DISTRIBUTE PAYMENT PROPORTIONALLY ACROSS ENROLLMENTS
+                transaction = None
+                remaining_to_distribute = extracted_amount
                 
-                # Store receipt path
-                existing_receipts = enrollment.receipt_image_path
+                for idx, item in enumerate(enrollment_remaining_balances):
+                    enrollment = item['enrollment']
+                    enrollment_id = item['enrollment_id']
+                    enrollment_remaining = item['remaining']
+                    
+                    # Calculate proportional amount
+                    if idx == len(enrollment_remaining_balances) - 1:
+                        amount_for_this_enrollment = remaining_to_distribute
+                    else:
+                        proportion = enrollment_remaining / total_remaining_needed
+                        amount_for_this_enrollment = extracted_amount * proportion
+                        remaining_to_distribute -= amount_for_this_enrollment
+                    
+                    # Apply payment
+                    current_paid = enrollment.amount_paid or 0
+                    enrollment.amount_paid = current_paid + amount_for_this_enrollment
+                    
+                    # Check if complete
+                    if enrollment.amount_paid >= enrollment.payment_amount:
+                        enrollment.payment_status = PaymentStatus.VERIFIED
+                        enrollment.verification_date = datetime.now()
+                        logger.info(f"✅ Full payment reached for enrollment {enrollment_id}")
+                    else:
+                        enrollment.payment_status = PaymentStatus.PENDING
+                        logger.info(f"⚠️ Still partial for enrollment {enrollment_id}")
+                    
+                    # Store receipt path
+                    existing_receipts = enrollment.receipt_image_path
+                    
+                    if existing_receipts:
+                        enrollment.receipt_image_path = existing_receipts + "," + file_path
+                    else:
+                        enrollment.receipt_image_path = file_path
+                    
+                    logger.info(f"📝 Updated receipt path for enrollment {enrollment_id}")
                 
-                if existing_receipts:
-                    enrollment.receipt_image_path = existing_receipts + "," + file_path
-                else:
-                    enrollment.receipt_image_path = file_path
-                
-                logger.info(f"📝 Updated receipt path for enrollment {enrollment.enrollment_id}")
-            
-                # ✅ FLUSH ONCE after loop ends (OUTDENTED - same level as 'for')
-            session.flush()
-            logger.info(f"💾 Committed all {len(enrollment_remaining_balances)} enrollment updates to database")
+                # ✅ FLUSH ONCE after loop ends
+                session.flush()
+                logger.info(f"💾 Committed all {len(enrollment_remaining_balances)} enrollment updates to database")
                 
             # Create/update transaction
             if not transaction:
@@ -925,25 +948,31 @@ ID: <code>{telegram_user_id}</code>
                             receipt_amount=extracted_amount
                         )
                     else:
-                        transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
-                        transaction = crud.update_transaction(
-                            session,
-                            transaction.transaction_id,
-                            status=TransactionStatus.PENDING,
-                            receipt_image_path=file_path,
-                            extracted_account=result.get("account_number"),
-                            extracted_amount=extracted_amount,
-                            failure_reason=f"Partial payment: {extracted_amount:.0f}/{expected_amount_for_gemini:.0f} SDG. Remaining: {remaining_total:.0f} SDG",
-                            gemini_response=(result.get("raw_response") or "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}",
-                            fraud_score=fraud_analysis['fraud_score'],
-                            fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
-                            receipt_transaction_id=transaction_id,
-                            receipt_transfer_datetime=transfer_datetime,
-                            receipt_sender_name=gemini_result.get('sender_name'),
-                            receipt_amount=extracted_amount
-                        )
+                        # Use first enrollment ID for transaction
+                        first_enrollment_id = enrollment_ids_to_update[0] if enrollment_ids_to_update else None
+                        if first_enrollment_id:
+                            transaction = crud.create_transaction(session, first_enrollment_id, file_path)
+                            transaction = crud.update_transaction(
+                                session,
+                                transaction.transaction_id,
+                                status=TransactionStatus.PENDING,
+                                receipt_image_path=file_path,
+                                extracted_account=result.get("account_number"),
+                                extracted_amount=extracted_amount,
+                                failure_reason=f"Partial payment: {extracted_amount:.0f}/{expected_amount_for_gemini:.0f} SDG. Remaining: {remaining_total:.0f} SDG",
+                                gemini_response=(result.get("raw_response") or "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}",
+                                fraud_score=fraud_analysis['fraud_score'],
+                                fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
+                                receipt_transaction_id=transaction_id,
+                                receipt_transfer_datetime=transfer_datetime,
+                                receipt_sender_name=gemini_result.get('sender_name'),
+                                receipt_amount=extracted_amount
+                            )
                 else:
-                    transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
+                    # Use first enrollment ID for transaction
+                    first_enrollment_id = enrollment_ids_to_update[0] if enrollment_ids_to_update else None
+                    if first_enrollment_id:
+                        transaction = crud.create_transaction(session, first_enrollment_id, file_path)
                     transaction = crud.update_transaction(
                         session,
                         transaction.transaction_id,
@@ -1010,18 +1039,23 @@ ID: <code>{telegram_user_id}</code>
             )
             
             # Show breakdown for each course
-            for item in enrollment_remaining_balances:
-                enrollment = item['enrollment']
-                course_name = enrollment.course.course_name if enrollment.course else "Unknown"
-                current_paid = enrollment.amount_paid or 0
-                total_price = enrollment.payment_amount
-                remaining = total_price - current_paid
-                
-                partial_message += f"• {course_name}: {current_paid:.0f}/{total_price:.0f} SDG"
-                if remaining > 0:
-                    partial_message += f" (متبقي: {remaining:.0f})\n"
-                else:
-                    partial_message += f" ✅ مكتمل\n"
+            # Fetch course names from database (enrollment_remaining_balances has enrollments from closed session)
+            with get_db() as session_for_courses:
+                from database.models import Course, Enrollment
+                for item in enrollment_remaining_balances:
+                    enrollment_id = item['enrollment_id']
+                    enrollment = session_for_courses.query(Enrollment).filter(Enrollment.enrollment_id == enrollment_id).first()
+                    if enrollment:
+                        course_name = enrollment.course.course_name if enrollment.course else "Unknown"
+                        current_paid = enrollment.amount_paid or 0
+                        total_price = enrollment.payment_amount
+                        remaining = total_price - current_paid
+                        
+                        partial_message += f"• {course_name}: {current_paid:.0f}/{total_price:.0f} SDG"
+                        if remaining > 0:
+                            partial_message += f" (متبقي: {remaining:.0f})\n"
+                        else:
+                            partial_message += f" ✅ مكتمل\n"
             
             partial_message += (
                 f"\n📊 **المبلغ المطلوب الكلي:** {expected_amount_for_gemini:.0f} SDG\n"
@@ -1106,123 +1140,137 @@ ID: <code>{telegram_user_id}</code>
             return  # ✅ STOP HERE for partial payment
         
         # ✅ CONTINUE WITH FULL PAYMENT (existing logic)
-        transaction = None
-        for enrollment in enrollments_to_update:
-            payment_status = PaymentStatus.VERIFIED if result["is_valid"] else PaymentStatus.FAILED
-            
-            # ✅ If verified, set amount_paid to full amount
-            if result["is_valid"]:
-                enrollment.amount_paid = enrollment.payment_amount
-            
-            # ✅ APPEND RECEIPT PATH (don't overwrite)
-            existing_receipts = enrollment.receipt_image_path
-            if existing_receipts:
-                new_receipt_path = existing_receipts + "," + file_path
-            else:
-                new_receipt_path = file_path
-            
-            crud.update_enrollment_status(
-                session,
-                enrollment.enrollment_id,
-                payment_status,
-                receipt_path=new_receipt_path,  # ✅ USE APPENDED PATH
-                admin_notes=result.get("reason") if not result["is_valid"] else f"Fraud score: {fraud_analysis['fraud_score']}"
-            )
-            
-            logger.info(f"📝 Updated receipt path for enrollment {enrollment.enrollment_id}: {new_receipt_path}")
-            
-            if not transaction:
-                if resubmission_enrollment_id:
-                    from database.models import Transaction
-                    transaction = session.query(Transaction).filter(
-                        Transaction.enrollment_id == resubmission_enrollment_id
-                    ).order_by(Transaction.submitted_date.desc()).first()
+        # Use a new session since the previous one closed
+        with get_db() as session:
+            from database.models import Enrollment
+            transaction = None
+            for enrollment_id in enrollment_ids_to_update:
+                enrollment = session.query(Enrollment).filter(Enrollment.enrollment_id == enrollment_id).first()
+                if not enrollment:
+                    continue
                     
-                    if transaction:
-                        transaction = crud.update_transaction(
-                            session,
-                            transaction.transaction_id,
-                            status=TransactionStatus.APPROVED if result["is_valid"] else TransactionStatus.REJECTED,
-                            receipt_image_path=file_path,
-                            extracted_account=result.get("account_number"),
-                            extracted_amount=result.get("amount"),
-                            failure_reason=result.get("reason", ""),
-                            gemini_response=(result.get("raw_response") or "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}",
-                            fraud_score=fraud_analysis['fraud_score'],
-                            fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
-                            receipt_transaction_id=transaction_id,
-                            receipt_transfer_datetime=transfer_datetime,
-                            receipt_sender_name=gemini_result.get('sender_name'),
-                            receipt_amount=result.get('amount')
-                        )
-                        logger.info(f"Updated transaction {transaction.transaction_id}")
-                    else:
-                        transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
-                        transaction = crud.update_transaction(
-                            session,
-                            transaction.transaction_id,
-                            status=TransactionStatus.APPROVED if result["is_valid"] else TransactionStatus.REJECTED,
-                            receipt_image_path=file_path,
-                            extracted_account=result.get("account_number"),
-                            extracted_amount=result.get("amount"),
-                            failure_reason=result.get("reason", ""),
-                            gemini_response=(result.get("raw_response") or "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}",
-                            fraud_score=fraud_analysis['fraud_score'],
-                            fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
-                            receipt_transaction_id=transaction_id,
-                            receipt_transfer_datetime=transfer_datetime,
-                            receipt_sender_name=gemini_result.get('sender_name'),
-                            receipt_amount=result.get('amount')
-                        )
-                        logger.info(f"Created new transaction {transaction.transaction_id}")
+                payment_status = PaymentStatus.VERIFIED if result["is_valid"] else PaymentStatus.FAILED
+                
+                # ✅ If verified, set amount_paid to full amount
+                if result["is_valid"]:
+                    enrollment.amount_paid = enrollment.payment_amount
+                
+                # ✅ APPEND RECEIPT PATH (don't overwrite)
+                existing_receipts = enrollment.receipt_image_path
+                if existing_receipts:
+                    new_receipt_path = existing_receipts + "," + file_path
                 else:
-                    transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
-                    transaction = crud.update_transaction(
-                        session,
-                        transaction.transaction_id,
-                        status=TransactionStatus.APPROVED if result["is_valid"] else TransactionStatus.REJECTED,
-                        receipt_image_path=file_path,
-                        extracted_account=result.get("account_number"),
-                        extracted_amount=result.get("amount"),
-                        failure_reason=result.get("reason", ""),
-                        gemini_response=(result.get("raw_response") or "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}",
-                        fraud_score=fraud_analysis['fraud_score'],
-                        fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
-                        receipt_transaction_id=transaction_id,
-                        receipt_transfer_datetime=transfer_datetime,
-                        receipt_sender_name=gemini_result.get('sender_name'),
-                        receipt_amount=result.get('amount')
-                    )
-                    logger.info(f"Created transaction {transaction.transaction_id}")
+                    new_receipt_path = file_path
+                
+                crud.update_enrollment_status(
+                    session,
+                    enrollment_id,
+                    payment_status,
+                    receipt_path=new_receipt_path,  # ✅ USE APPENDED PATH
+                    admin_notes=result.get("reason") if not result["is_valid"] else f"Fraud score: {fraud_analysis['fraud_score']}"
+                )
+                
+                logger.info(f"📝 Updated receipt path for enrollment {enrollment_id}: {new_receipt_path}")
+                
+                if not transaction:
+                    if resubmission_enrollment_id:
+                        from database.models import Transaction
+                        transaction = session.query(Transaction).filter(
+                            Transaction.enrollment_id == resubmission_enrollment_id
+                        ).order_by(Transaction.submitted_date.desc()).first()
+                        
+                        if transaction:
+                            transaction = crud.update_transaction(
+                                session,
+                                transaction.transaction_id,
+                                status=TransactionStatus.APPROVED if result["is_valid"] else TransactionStatus.REJECTED,
+                                receipt_image_path=file_path,
+                                extracted_account=result.get("account_number"),
+                                extracted_amount=result.get("amount"),
+                                failure_reason=result.get("reason", ""),
+                                gemini_response=(result.get("raw_response") or "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}",
+                                fraud_score=fraud_analysis['fraud_score'],
+                                fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
+                                receipt_transaction_id=transaction_id,
+                                receipt_transfer_datetime=transfer_datetime,
+                                receipt_sender_name=gemini_result.get('sender_name'),
+                                receipt_amount=result.get('amount')
+                            )
+                            logger.info(f"Updated transaction {transaction.transaction_id}")
+                        else:
+                            transaction = crud.create_transaction(session, enrollment_id, file_path)
+                            transaction = crud.update_transaction(
+                                session,
+                                transaction.transaction_id,
+                                status=TransactionStatus.APPROVED if result["is_valid"] else TransactionStatus.REJECTED,
+                                receipt_image_path=file_path,
+                                extracted_account=result.get("account_number"),
+                                extracted_amount=result.get("amount"),
+                                failure_reason=result.get("reason", ""),
+                                gemini_response=(result.get("raw_response") or "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}",
+                                fraud_score=fraud_analysis['fraud_score'],
+                                fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
+                                receipt_transaction_id=transaction_id,
+                                receipt_transfer_datetime=transfer_datetime,
+                                receipt_sender_name=gemini_result.get('sender_name'),
+                                receipt_amount=result.get('amount')
+                            )
+                            logger.info(f"Created new transaction {transaction.transaction_id}")
+                    else:
+                        transaction = crud.create_transaction(session, enrollment_id, file_path)
+                        transaction = crud.update_transaction(
+                            session,
+                            transaction.transaction_id,
+                            status=TransactionStatus.APPROVED if result["is_valid"] else TransactionStatus.REJECTED,
+                            receipt_image_path=file_path,
+                            extracted_account=result.get("account_number"),
+                            extracted_amount=result.get("amount"),
+                            failure_reason=result.get("reason", ""),
+                            gemini_response=(result.get("raw_response") or "") + f"\n\nFraud Score: {fraud_analysis['fraud_score']}",
+                            fraud_score=fraud_analysis['fraud_score'],
+                            fraud_indicators=", ".join(fraud_analysis.get('fraud_indicators', [])),
+                            receipt_transaction_id=transaction_id,
+                            receipt_transfer_datetime=transfer_datetime,
+                            receipt_sender_name=gemini_result.get('sender_name'),
+                            receipt_amount=result.get('amount')
+                        )
+                        logger.info(f"Created transaction {transaction.transaction_id}")
+                
+                session.commit()
 
         if result["is_valid"]:
+            # Fetch enrollments fresh from database for course invites
             course_data_list = []
             group_links_list = []
             
             # Import the group invitation function
             from handlers.group_registration import send_course_invite_link
             
-            for e in enrollments_to_update:
-                if e.payment_status == PaymentStatus.VERIFIED:
-                    course = e.course
-                    if course:
-                        # Extract data immediately while in session
-                        course_data_list.append({
-                            'course_id': course.course_id,
-                            'course_name': course.course_name
-                        })
-                        
-                        # Send course group invite link (auto-fetches if missing)
-                        await send_course_invite_link(update, context, telegram_user_id, course.course_id)
-                        
-                        # Also keep for backwards compatibility in success message
-                        if course.telegram_group_link:
-                            group_links_list.append(course.telegram_group_link)
-            if not resubmission_enrollment_id:
-                crud.clear_user_cart(session, internal_user_id)
-                logger.info(f"Cleared cart for user {telegram_user_id}")
+            with get_db() as session_for_invites:
+                from database.models import Enrollment
+                for enrollment_id in enrollment_ids_to_update:
+                    enrollment = session_for_invites.query(Enrollment).filter(Enrollment.enrollment_id == enrollment_id).first()
+                    if enrollment and enrollment.payment_status == PaymentStatus.VERIFIED:
+                        course = enrollment.course
+                        if course:
+                            # Extract data immediately while in session
+                            course_data_list.append({
+                                'course_id': course.course_id,
+                                'course_name': course.course_name
+                            })
+                            
+                            # Send course group invite link (auto-fetches if missing)
+                            await send_course_invite_link(update, context, telegram_user_id, course.course_id)
+                            
+                            # Also keep for backwards compatibility in success message
+                            if course.telegram_group_link:
+                                group_links_list.append(course.telegram_group_link)
             
-            session.commit()
+            # Clear cart if not a resubmission
+            if not resubmission_enrollment_id:
+                with get_db() as session_for_cart:
+                    crud.clear_user_cart(session_for_cart, internal_user_id)
+                    logger.info(f"Cleared cart for user {telegram_user_id}")
     
         # ==================== USER NOTIFICATIONS ====================
     
