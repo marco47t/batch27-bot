@@ -356,7 +356,7 @@ def error_message(error_type: str) -> str:
         "course_not_found": "❌ الدورة غير موجودة.",
         "enrollment_not_found": "❌ التسجيل غير موجود.",
         "payment_data_missing": "❌ بيانات الدفع مفقودة. حاول مرة أخرى.",
-        "payment_amount_missing": "❌ المبلغ المطلوب مفقود. حاول مرة أخرى.",
+        "payment_amount_missing": "حصل خطأ. يمكنك الذهاب الى دوراتي والمحاولة مرة أخرى",
         "already_enrolled": "⚠️ أنت مسجل بالفعل في هذه الدورة.",
         "general": "❌ حدث خطأ. يرجى المحاولة لاحقاً."
     }
