@@ -999,7 +999,8 @@ Do you want to register with a certificate?
                     context.user_data['cart_total_for_payment'] = total
                     context.user_data['pending_enrollment_ids_for_payment'] = enrollment_ids
                     context.user_data['awaiting_receipt_upload'] = True
-                    context.user_data['expected_amount_for_gemini'] = total
+                    context.user_data['current_payment_total'] = total
+                    context.user_data['current_payment_enrollment_ids'] = enrollment_ids
                     
                     # Send payment instructions
                     from utils.messages import payment_instructions_message
