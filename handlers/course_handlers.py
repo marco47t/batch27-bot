@@ -320,7 +320,28 @@ async def register_course_callback(update: Update, context: ContextTypes.DEFAULT
         if crud.is_user_enrolled(session, internal_user_id, course_id):
             await query.answer("⚠️ أنت مسجل بالفعل في هذه الدورة!", show_alert=True)
             return
-
+        if not crud.has_legal_name(session, internal_user_id):
+            logger.info(f"User {telegram_user_id} needs to provide legal name first")
+            
+            await query.edit_message_text(
+                "📝 *تسجيل الاسم القانوني مطلوب | Legal Name Required*\n\n"
+                "قبل إتمام التسجيل، نحتاج إلى اسمك الرباعي الكامل كما هو مكتوب في المستندات الرسمية.\n"
+                "Before completing registration, we need your full four-part name as written on official documents.\n\n"
+                "⚠️ *مهم جداً | Very Important:*\n"
+                "• يجب أن يكون الاسم باللغة الإنجليزية\n"
+                "• Must be in English\n"
+                "• الاسم الرباعي: (اسمك - اسم والدك - اسم جدك - اسم جد والدك)\n"
+                "• Four parts: (Your name - Father - Grandfather - Great-grandfather)\n\n"
+                "🔹 *الخطوة 1/4:* أدخل اسمك الأول\n"
+                "🔹 *Step 1/4:* Enter your first name",
+                parse_mode='Markdown'
+            )
+            
+            # Set context for legal name collection during registration
+            context.user_data['collecting_legal_name_for_registration'] = True
+            context.user_data['registration_internal_user_id'] = internal_user_id
+            
+            return  # Stop here, wait for legal name input
         if course.certificate_available and course.certificate_price > 0:
             message = f"""
             📚 <b>{course.course_name}</b>
