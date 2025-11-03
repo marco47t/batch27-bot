@@ -332,16 +332,16 @@ async def register_course_callback(update: Update, context: ContextTypes.DEFAULT
                 "• Must be in English\n"
                 "• الاسم الرباعي: (اسمك - اسم والدك - اسم جدك - اسم جد والدك)\n"
                 "• Four parts: (Your name - Father - Grandfather - Great-grandfather)\n\n"
-                "🔹 *الخطوة 1/4:* أدخل اسمك الأول\n"
-                "🔹 *Step 1/4:* Enter your first name",
+                "🔹 *الخطوة 1/4:* أدخل اسمك الأول",
                 parse_mode='Markdown'
             )
-            
-            # Set context for legal name collection during registration
+
+            # Set context for legal name collection
             context.user_data['collecting_legal_name_for_registration'] = True
             context.user_data['registration_internal_user_id'] = internal_user_id
+            context.user_data['course_detail_course_id'] = course_id  # ← Mark as course details flow
             
-            return  # Stop here, wait for legal name input
+            return  # Wait for legal name input
         if course.certificate_available and course.certificate_price > 0:
             message = f"""
             📚 <b>{course.course_name}</b>
@@ -804,7 +804,7 @@ async def clear_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 async def handle_legal_name_during_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle legal name collection during course registration"""
+    """Handle legal name collection during course registration AND course details registration"""
     
     # Check if we're collecting legal name
     if not context.user_data.get('collecting_legal_name_for_registration'):
@@ -861,6 +861,7 @@ async def handle_legal_name_during_registration(update: Update, context: Context
         # Step 4: Great-grandfather's name - Save and proceed
         with get_db() as session:
             internal_user_id = context.user_data.get('registration_internal_user_id')
+            course_detail_course_id = context.user_data.get('course_detail_course_id')  # ← NEW
             
             if not internal_user_id:
                 await update.message.reply_text(
@@ -893,8 +894,8 @@ async def handle_legal_name_during_registration(update: Update, context: Context
                     "✅ *تم حفظ اسمك القانوني بنجاح!*\n"
                     "✅ *Legal name saved successfully!*\n\n"
                     f"📋 *الاسم الكامل | Full Name:*\n{full_name}\n\n"
-                    "جاري المتابعة إلى الدفع...\n"
-                    "Proceeding to payment...",
+                    "جاري المتابعة...\n"
+                    "Proceeding...",
                     parse_mode='Markdown'
                 )
                 
@@ -906,66 +907,109 @@ async def handle_legal_name_during_registration(update: Update, context: Context
                 context.user_data.pop('legal_name_first', None)
                 context.user_data.pop('legal_name_father', None)
                 context.user_data.pop('legal_name_grandfather', None)
+                context.user_data.pop('course_detail_course_id', None)  # ← NEW
                 
-                # Now proceed with cart confirmation
-                cart_items = crud.get_user_cart(session, internal_user_id)
-                
-                if not cart_items:
-                    await update.message.reply_text(
-                        "❌ عربة التسوق فارغة\n❌ Cart is empty",
-                        reply_markup=back_to_main_keyboard()
-                    )
-                    return
-                
-                cart_totals = crud.calculate_cart_total(session, internal_user_id)
-                total = cart_totals['total']
-
-                
-                # Create pending enrollments
-                cart_items = crud.get_user_cart(session, internal_user_id)
-
-                if not cart_items:
-                    await update.message.reply_text(
-                        "❌ عربة التسوق فارغة\n❌ Cart is empty",
-                        reply_markup=back_to_main_keyboard()
-                    )
-                    return
-
-                # Create pending enrollments with certificate info
-                enrollment_ids = []
-                for item in cart_items:
-                    course = item.course
+                # ✅ NEW: Check if this was from course details registration
+                if course_detail_course_id:
+                    logger.info(f"Legal name saved for course detail registration, course_id={course_detail_course_id}")
                     
-                    # Calculate payment amount including certificate
-                    payment_amount = course.price
-                    if item.with_certificate and course.certificate_available:
-                        payment_amount += course.certificate_price
+                    # Proceed with course detail certificate check
+                    course = crud.get_course_by_id(session, course_detail_course_id)
+
+                    if not course:
+                        await update.message.reply_text("❌ الدورة غير موجودة.")
+                        return
+
+                    if course.certificate_available and course.certificate_price > 0:
+                        message = f"""
+📚 {course.course_name}
+
+💰 سعر الدورة: {course.price:.0f} SDG
+
+📜 سعر الشهادة: {course.certificate_price:.0f} SDG
+
+هل تريد التسجيل مع شهادة؟
+
+Do you want to register with a certificate?
+
+"""
+                        keyboard = certificate_option_keyboard(course_detail_course_id, register_flow=True)
+                        
+                        await update.message.reply_text(
+                            message,
+                            reply_markup=keyboard,
+                            parse_mode='HTML'
+                        )
+                    else:
+                        # No certificate, proceed directly to payment
+                        payment_amount = course.price
+
+                        enrollment = crud.create_enrollment(session, internal_user_id, course.course_id, payment_amount)
+                        enrollment.with_certificate = False
+                        session.commit()
+
+                        context.user_data['cart_total_for_payment'] = payment_amount
+                        context.user_data['pending_enrollment_ids_for_payment'] = [enrollment.enrollment_id]
+                        context.user_data['awaiting_receipt_upload'] = True
+                        context.user_data['expected_amount_for_gemini'] = payment_amount
+
+                        from handlers.payment_handlers import proceed_to_payment_callback
+
+                        await proceed_to_payment_callback(update, context)
+                
+                else:
+                    # ✅ EXISTING: Cart registration flow (all your existing code)
+                    logger.info(f"Legal name saved for cart registration")
                     
-                    enrollment = crud.create_enrollment(session, internal_user_id, course.course_id, payment_amount)
-                    enrollment.with_certificate = item.with_certificate
-                    enrollment_ids.append(enrollment.enrollment_id)
-                    logger.info(f"Created enrollment {enrollment.enrollment_id} for user {internal_user_id}, amount: {payment_amount}")
+                    # Now proceed with cart confirmation
+                    cart_items = crud.get_user_cart(session, internal_user_id)
+                    
+                    if not cart_items:
+                        await update.message.reply_text(
+                            "❌ عربة التسوق فارغة\n❌ Cart is empty",
+                            reply_markup=back_to_main_keyboard()
+                        )
+                        return
+                    
+                    cart_totals = crud.calculate_cart_total(session, internal_user_id)
+                    total = cart_totals['total']
 
-                session.commit()
+                    # Create pending enrollments with certificate info
+                    enrollment_ids = []
+                    for item in cart_items:
+                        course = item.course
+                        
+                        # Calculate payment amount including certificate
+                        payment_amount = course.price
+                        if item.with_certificate and course.certificate_available:
+                            payment_amount += course.certificate_price
+                        
+                        enrollment = crud.create_enrollment(session, internal_user_id, course.course_id, payment_amount)
+                        enrollment.with_certificate = item.with_certificate
+                        enrollment_ids.append(enrollment.enrollment_id)
+                        logger.info(f"Created enrollment {enrollment.enrollment_id} for user {internal_user_id}, amount: {payment_amount}")
 
-                # Clear cart after creating enrollments
-                crud.clear_user_cart(session, internal_user_id)
-                session.commit()
-                
-                # Store in context for payment
-                context.user_data['cart_total_for_payment'] = total
-                context.user_data['pending_enrollment_ids_for_payment'] = enrollment_ids
-                context.user_data['awaiting_receipt_upload'] = True
-                context.user_data['expected_amount_for_gemini'] = total
-                # Send payment instructions
-                from utils.messages import payment_instructions_message
-                from utils.keyboards import payment_upload_keyboard
-                
-                await update.message.reply_text(
-                    payment_instructions_message(total),
-                    reply_markup=payment_upload_keyboard(),
-                    parse_mode='Markdown'
-                )
+                    session.commit()
+
+                    # Clear cart after creating enrollments
+                    crud.clear_user_cart(session, internal_user_id)
+                    session.commit()
+                    
+                    # Store in context for payment
+                    context.user_data['cart_total_for_payment'] = total
+                    context.user_data['pending_enrollment_ids_for_payment'] = enrollment_ids
+                    context.user_data['awaiting_receipt_upload'] = True
+                    context.user_data['expected_amount_for_gemini'] = total
+                    
+                    # Send payment instructions
+                    from utils.messages import payment_instructions_message
+                    from utils.keyboards import payment_upload_keyboard
+                    
+                    await update.message.reply_text(
+                        payment_instructions_message(total),
+                        reply_markup=payment_upload_keyboard(),
+                        parse_mode='Markdown'
+                    )
             else:
                 await update.message.reply_text(
                     "❌ حدث خطأ أثناء حفظ الاسم. يرجى المحاولة مرة أخرى.\n"
@@ -974,7 +1018,6 @@ async def handle_legal_name_during_registration(update: Update, context: Context
                 )
                 context.user_data.clear()
 
-# Add after your existing course selection handler
 
 async def course_add_to_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle adding course to cart - ask about certificate first"""
