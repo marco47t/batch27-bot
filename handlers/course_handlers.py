@@ -1019,6 +1019,7 @@ Do you want to register with a certificate?
                 context.user_data.clear()
 
 
+
 async def course_add_to_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle adding course to cart - ask about certificate first"""
     query = update.callback_query
