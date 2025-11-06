@@ -38,7 +38,12 @@ from handlers import (
     instructor_reviews
 )
 from handlers.course_handlers import course_dates_callback, course_description_callback, handle_legal_name_during_registration
-from handlers.support_handlers import contact_admin_callback, contact_admin_command, handle_support_message
+from handlers.support_handlers import (
+    contact_admin_command, 
+    handle_support_message,
+    start_admin_reply_callback,
+    handle_admin_reply_message
+)
 from handlers.menu_handlers import contact_admin_callback, contact_admin_text_handler
 from database import crud, get_db, init_db
 from utils.helpers import handle_error
@@ -224,14 +229,14 @@ def main():
     # ==========================
     # COMMAND HANDLERS
     # ==========================
-    application.add_handler(CommandHandler("start", menu_handlers.start_command))
-    application.add_handler(CommandHandler("admin", admin_handlers.admin_command))
-    application.add_handler(CommandHandler("pending_registrations", admin_pending_registrations.admin_pending_registrations_command))  # NEW
+    application.add_handler(CommandHandler("start", menu_handlers.start_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("admin", admin_handlers.admin_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("pending_registrations", admin_pending_registrations.admin_pending_registrations_command, filters=filters.ChatType.PRIVATE))  # NEW
 
     # ADMIN COURSE MANAGEMENT COMMANDS
-    application.add_handler(CommandHandler("listcourses", admin_course_management.list_courses_command))
-    application.add_handler(CommandHandler("togglecourse", admin_course_management.toggle_course_command))
-    application.add_handler(CommandHandler("deletecourse", admin_course_management.delete_course_command))
+    application.add_handler(CommandHandler("listcourses", admin_course_management.list_courses_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("togglecourse", admin_course_management.toggle_course_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("deletecourse", admin_course_management.delete_course_command, filters=filters.ChatType.PRIVATE))
     
     # ==========================
     # CONVERSATION HANDLERS
@@ -239,13 +244,13 @@ def main():
     
     # Admin Registration Conversation
     admin_reg_conv = ConversationHandler(
-        entry_points=[CommandHandler("register", admin_registration.register_admin_command)],
+        entry_points=[CommandHandler("register", admin_registration.register_admin_command, filters=filters.ChatType.PRIVATE)],
         states={
             admin_registration.AWAITING_PASSWORD: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_registration.receive_admin_password)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_registration.receive_admin_password)
             ],
         },
-        fallbacks=[CommandHandler("cancel", admin_registration.cancel_admin_registration)],
+        fallbacks=[CommandHandler("cancel", admin_registration.cancel_admin_registration, filters=filters.ChatType.PRIVATE)],
         per_message=False,
         allow_reentry=True,
         name="admin_registration"
@@ -254,22 +259,22 @@ def main():
     
     # Add Course Conversation
     addcourse_conv = ConversationHandler(
-        entry_points=[CommandHandler("addcourse", admin_course_management.add_course_command)],
+        entry_points=[CommandHandler("addcourse", admin_course_management.add_course_command, filters=filters.ChatType.PRIVATE)],
             states={
-                admin_course_management.COURSE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_name_input)],
-                admin_course_management.COURSE_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_description_input)],
-                admin_course_management.COURSE_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_price_input)],
-                admin_course_management.COURSE_CERTIFICATE_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_certificate_price_input)],
-                admin_course_management.COURSE_WHATSAPP_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_whatsapp_link_input)],
-                admin_course_management.COURSE_GROUP_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_group_link_input)],
-                admin_course_management.COURSE_MAX_STUDENTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_max_students_input)],
-                admin_course_management.COURSE_START_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_start_date_input)],
-                admin_course_management.COURSE_END_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_end_date_input)],
-                admin_course_management.COURSE_REG_OPEN_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_reg_open_date_input)],
-                admin_course_management.COURSE_REG_CLOSE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.course_reg_close_date_input)],
+                admin_course_management.COURSE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_course_management.course_name_input)],
+                admin_course_management.COURSE_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_course_management.course_description_input)],
+                admin_course_management.COURSE_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_course_management.course_price_input)],
+                admin_course_management.COURSE_CERTIFICATE_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_course_management.course_certificate_price_input)],
+                admin_course_management.COURSE_WHATSAPP_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_course_management.course_whatsapp_link_input)],
+                admin_course_management.COURSE_GROUP_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_course_management.course_group_link_input)],
+                admin_course_management.COURSE_MAX_STUDENTS: [MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_course_management.course_max_students_input)],
+                admin_course_management.COURSE_START_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_course_management.course_start_date_input)],
+                admin_course_management.COURSE_END_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_course_management.course_end_date_input)],
+                admin_course_management.COURSE_REG_OPEN_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_course_management.course_reg_open_date_input)],
+                admin_course_management.COURSE_REG_CLOSE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_course_management.course_reg_close_date_input)],
                 admin_course_management.COURSE_CONFIRM: [CallbackQueryHandler(admin_course_management.course_confirm_callback)],
             },
-        fallbacks=[CommandHandler("cancel", admin_course_management.cancel_course_creation)],
+        fallbacks=[CommandHandler("cancel", admin_course_management.cancel_course_creation, filters=filters.ChatType.PRIVATE)],
         per_message=False,
         name="add_course"
     )
@@ -277,7 +282,7 @@ def main():
     
     # Edit Course Conversation
     editcourse_conv = ConversationHandler(
-        entry_points=[CommandHandler("editcourse", admin_course_management.edit_course_command)],
+        entry_points=[CommandHandler("editcourse", admin_course_management.edit_course_command, filters=filters.ChatType.PRIVATE)],
         states={
             admin_course_management.EDIT_SELECT_COURSE: [
                 CallbackQueryHandler(admin_course_management.edit_select_course_callback)
@@ -286,10 +291,10 @@ def main():
                 CallbackQueryHandler(admin_course_management.edit_select_field_callback)
             ],
             admin_course_management.EDIT_INPUT_VALUE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_course_management.edit_input_value)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_course_management.edit_input_value)
             ],
         },
-        fallbacks=[CommandHandler("cancel", admin_course_management.cancel_course_creation)],
+        fallbacks=[CommandHandler("cancel", admin_course_management.cancel_course_creation, filters=filters.ChatType.PRIVATE)],
         per_message=False,
         name="edit_course"
     )
@@ -299,35 +304,35 @@ def main():
     # MESSAGE HANDLERS (ReplyKeyboard Buttons) - FIXED
     # ==========================
     application.add_handler(MessageHandler(
-        filters.Text(["1- الدورات المتاحة 📚"]), 
+        filters.Text(["1- الدورات المتاحة 📚"]) & filters.ChatType.PRIVATE, 
         menu_handlers.handle_courses_menu_message
 
     ))
     application.add_handler(MessageHandler(
-        filters.Text(["2- دوراتي 📋"]), 
+        filters.Text(["2- دوراتي 📋"]) & filters.ChatType.PRIVATE, 
         menu_handlers.handle_my_courses_from_message
     ))
     application.add_handler(MessageHandler(
-        filters.Text(["3- حول البوت ℹ️"]),
+        filters.Text(["3- حول البوت ℹ️"]) & filters.ChatType.PRIVATE,
         menu_handlers.handle_about_bot_message
     ))
 
     application.add_handler(MessageHandler(
-        filters.Text(["📞 التواصل مع الإدارة"]),
+        filters.Text(["📞 التواصل مع الإدارة"]) & filters.ChatType.PRIVATE,
         menu_handlers.contact_admin_text_handler
     ))
 
     application.add_handler(MessageHandler(
-        filters.Text(["تابعونا 📲"]),
+        filters.Text(["تابعونا 📲"]) & filters.ChatType.PRIVATE,
         menu_handlers.follow_us_callback
     ))
 
     application.add_handler(MessageHandler(
-        filters.Regex("^3- تقييم دورة ⭐$"),
+        filters.Regex("^3- تقييم دورة ⭐$") & filters.ChatType.PRIVATE,
         menu_handlers.rate_course_menu_handler
     ))
     application.add_handler(MessageHandler(
-        filters.Regex("^4- الإشعارات 🔔$"), 
+        filters.Regex("^4- الإشعارات 🔔$") & filters.ChatType.PRIVATE, 
         menu_handlers.preferences_menu_handler
     ))
     
@@ -398,6 +403,10 @@ def main():
         payment_handlers.proceed_to_payment_callback, 
         pattern='proceed_payment'
     ))
+    application.add_handler(CallbackQueryHandler(
+        menu_handlers.certificate_upgrade_callback,
+        pattern=r'^cert_upgrade_'
+    ))
     # Add this after the proceed_to_payment_callback handler
     application.add_handler(CallbackQueryHandler(
         payment_handlers.cancel_payment_callback,
@@ -425,11 +434,6 @@ def main():
     application.add_handler(CallbackQueryHandler(
         menu_handlers.cancel_selected_pending_callback,
         pattern='cancel_selected_pending'
-    ))
-    
-    application.add_handler(CallbackQueryHandler(
-        menu_handlers.my_links_callback,
-        pattern='my_links_menu'
     ))
 
     # Add these handlers
@@ -487,51 +491,54 @@ def main():
         admin_course_management.toggle_course_callback, 
         pattern='cancel_toggle'
     ))
-    application.add_handler(CommandHandler('dailyreport', admin_handlers.manual_daily_report_command))
+    application.add_handler(CommandHandler('dailyreport', admin_handlers.manual_daily_report_command, filters=filters.ChatType.PRIVATE))
 
     receipt_conv_handler = ConversationHandler(
         entry_points=[
-            CommandHandler('getreceipt', admin_receipt_management.get_receipt_command),
-            CommandHandler('receiptsdate', admin_receipt_management.receipts_date_command),
+            CommandHandler('getreceipt', admin_receipt_management.get_receipt_command, filters=filters.ChatType.PRIVATE),
+            CommandHandler('receiptsdate', admin_receipt_management.receipts_date_command, filters=filters.ChatType.PRIVATE),
         ],
         states={
             admin_receipt_management.RECEIPT_USER_ID: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_receipt_management.receipt_user_id_input)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_receipt_management.receipt_user_id_input)
             ],
             admin_receipt_management.RECEIPT_DATE_INPUT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_receipt_management.receipt_date_input)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_receipt_management.receipt_date_input)
             ],
         },
-        fallbacks=[CommandHandler('cancel', admin_receipt_management.cancel_receipt_search)],
+        fallbacks=[CommandHandler('cancel', admin_receipt_management.cancel_receipt_search, filters=filters.ChatType.PRIVATE)],
     )
     application.add_handler(receipt_conv_handler)
 
     # Simple command handlers
-    application.add_handler(CommandHandler('receiptstoday', admin_receipt_management.receipts_today_command))
+    application.add_handler(CommandHandler('receiptstoday', admin_receipt_management.receipts_today_command, filters=filters.ChatType.PRIVATE))
     # ==========================
     # ADMIN SUPPORT HANDLERS
     # ==========================
     application.add_handler(
-        MessageHandler(filters.Regex("^📞 التواصل مع الإدارة$"), contact_admin_text_handler)
+        MessageHandler(filters.Regex("^📞 التواصل مع الإدارة$") & filters.ChatType.PRIVATE, contact_admin_text_handler)
     )
     
     application.add_handler(CallbackQueryHandler(contact_admin_callback, pattern="^contact_admin$"))
+    application.add_handler(CallbackQueryHandler(start_admin_reply_callback, pattern=r'^admin_reply_'))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(config.ADMIN_USER_IDS) & filters.ChatType.PRIVATE, handle_admin_reply_message))
 
     # Add command
-    application.add_handler(CommandHandler("contact", contact_admin_command))
+    application.add_handler(CommandHandler("contact", contact_admin_command, filters=filters.ChatType.PRIVATE))
 
     # IMPORTANT: Add this BEFORE your other message handlers
     # This checks if user is in support mode first
     async def support_message_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Check and handle support messages first"""
-        if context.user_data.get('awaiting_support_message'):
+        # Only proceed if this is a private chat and user_data is available
+        if update.effective_chat.type == 'private' and context.user_data and context.user_data.get('awaiting_support_message'):
             await handle_support_message(update, context)
             return  # Stop processing other handlers
 
     # Add this handler with high priority (add it early in your handler list)
     application.add_handler(
         MessageHandler(
-            filters.TEXT | filters.PHOTO | filters.Document.ALL | filters.VOICE, 
+            (filters.TEXT | filters.PHOTO | filters.Document.ALL | filters.VOICE) & filters.ChatType.PRIVATE, 
             support_message_filter
         ),
         group=-1  # High priority - runs before other message handlers
@@ -540,22 +547,22 @@ def main():
     # FILE/IMAGE HANDLERS
     # ==========================
     application.add_handler(MessageHandler(
-        filters.PHOTO | filters.Document.IMAGE, 
+        (filters.PHOTO | filters.Document.IMAGE) & filters.ChatType.PRIVATE, 
         payment_handlers.receipt_upload_message_handler
     ))
 
     application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND, 
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, 
         handle_legal_name_during_registration
     ), group=0)  # Higher priority
 
     application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.User(config.ADMIN_USER_IDS), 
+        filters.TEXT & ~filters.COMMAND & filters.User(config.ADMIN_USER_IDS) & filters.ChatType.PRIVATE, 
         admin_handlers.rejection_reason_message_handler
     ), group=-2)
 
 
-    application.add_handler(CommandHandler("setcert", admin_handlers.set_certificate_price_command))
+    application.add_handler(CommandHandler("setcert", admin_handlers.set_certificate_price_command, filters=filters.ChatType.PRIVATE))
     application.add_handler(CallbackQueryHandler(
         course_handlers.certificate_choice_callback, 
         pattern="^cert_(yes|no)_"
@@ -568,7 +575,7 @@ def main():
 
     # GROUP REGISTRATION COMMAND
     # ==========================
-    application.add_handler(CommandHandler("register_group", group_registration.register_group_command))
+    application.add_handler(CommandHandler("register_group", group_registration.register_group_command, filters=filters.ChatType.PRIVATE))
     
     # Group registration callback
     application.add_handler(CallbackQueryHandler(
@@ -594,32 +601,32 @@ def main():
     application.add_handler(CallbackQueryHandler(instructor_reviews.show_instructor_reviews_callback, pattern=r'^course_reviews_\d+$'))
     application.add_handler(CallbackQueryHandler(instructor_reviews.start_rate_instructor_callback, pattern=r'^start_rate_\d+$'))
     application.add_handler(CallbackQueryHandler(instructor_reviews.rate_instructor_callback, pattern=r'^rate_instructor_\d+_\d+$'))
-    application.add_handler(CommandHandler("skip", instructor_reviews.skip_review_text_command))
+    application.add_handler(CommandHandler("skip", instructor_reviews.skip_review_text_command, filters=filters.ChatType.PRIVATE))
 
     # Message handler for review text (add with lower priority)
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, instructor_reviews.handle_review_text_message))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, instructor_reviews.handle_review_text_message))
 
     # Instructor management conversation
     instructor_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_instructor_management.start_add_instructor, pattern=r'^admin_add_instructor$')],
         states={
             admin_instructor_management.INSTRUCTOR_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_instructor_management.receive_instructor_name)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_instructor_management.receive_instructor_name)
             ],
             admin_instructor_management.INSTRUCTOR_SPECIALIZATION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_instructor_management.receive_instructor_specialization)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_instructor_management.receive_instructor_specialization)
             ],
             admin_instructor_management.INSTRUCTOR_BIO: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_instructor_management.receive_instructor_bio)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_instructor_management.receive_instructor_bio)
             ],
             admin_instructor_management.INSTRUCTOR_EMAIL: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_instructor_management.receive_instructor_email)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_instructor_management.receive_instructor_email)
             ],
             admin_instructor_management.INSTRUCTOR_PHONE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_instructor_management.receive_instructor_phone)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_instructor_management.receive_instructor_phone)
             ],
         },
-        fallbacks=[CommandHandler('cancel', admin_instructor_management.cancel_add_instructor)],
+        fallbacks=[CommandHandler('cancel', admin_instructor_management.cancel_add_instructor, filters=filters.ChatType.PRIVATE)],
         name="instructor_management",
         persistent=False
     )
@@ -633,7 +640,7 @@ def main():
     application.add_handler(CallbackQueryHandler(admin_instructor_management.toggle_instructor_status, pattern=r'^admin_toggle_instructor_\d+$'))
 
     # Student review instructor command
-    application.add_handler(CommandHandler("review_instructor", instructor_reviews.review_instructor_command))    
+    application.add_handler(CommandHandler("review_instructor", instructor_reviews.review_instructor_command, filters=filters.ChatType.PRIVATE))    
     
     # ==========================
     # ERROR HANDLER
@@ -681,13 +688,13 @@ def main():
     # ==========================
     # RUN BOT
     # ==========================
-    application.add_handler(CommandHandler('exportenrollments', admin_export.export_enrollments_command))
-    application.add_handler(CommandHandler('exporttransactions', admin_export.export_transactions_command))
-    application.add_handler(CommandHandler('dashboard', admin_export.generate_dashboard_command))
+    application.add_handler(CommandHandler('exportenrollments', admin_export.export_enrollments_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler('exporttransactions', admin_export.export_transactions_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler('dashboard', admin_export.generate_dashboard_command, filters=filters.ChatType.PRIVATE))
     
     # Broadcast conversation handler
     broadcast_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('broadcast', admin_broadcast.broadcast_command)],
+        entry_points=[CommandHandler('broadcast', admin_broadcast.broadcast_command, filters=filters.ChatType.PRIVATE)],
         states={
             admin_broadcast.BROADCAST_TYPE: [
                 CallbackQueryHandler(admin_broadcast.broadcast_type_callback)
@@ -696,30 +703,30 @@ def main():
                 CallbackQueryHandler(admin_broadcast.course_select_callback)
             ],
             admin_broadcast.BROADCAST_MESSAGE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_broadcast.broadcast_message_input)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_broadcast.broadcast_message_input)
             ],
             admin_broadcast.CONFIRM_BROADCAST: [
                 CallbackQueryHandler(admin_broadcast.confirm_broadcast_callback)
             ],
         },
-        fallbacks=[CommandHandler('cancel', admin_broadcast.cancel_broadcast)],
+        fallbacks=[CommandHandler('cancel', admin_broadcast.cancel_broadcast, filters=filters.ChatType.PRIVATE)],
     )
     application.add_handler(broadcast_conv_handler)
 
     # Student search conversation handler
     search_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('searchstudent', admin_search.search_student_command)],
+        entry_points=[CommandHandler('searchstudent', admin_search.search_student_command, filters=filters.ChatType.PRIVATE)],
         states={
             admin_search.SEARCH_INPUT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_search.search_input_handler)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, admin_search.search_input_handler)
             ],
         },
-        fallbacks=[CommandHandler('cancel', admin_search.cancel_search)],
+        fallbacks=[CommandHandler('cancel', admin_search.cancel_search, filters=filters.ChatType.PRIVATE)],
     )
     application.add_handler(search_conv_handler)
     
     review_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('ratecourse', student_reviews.rate_course_command)],
+        entry_points=[CommandHandler('ratecourse', student_reviews.rate_course_command, filters=filters.ChatType.PRIVATE)],
         states={
             student_reviews.REVIEW_COURSE_SELECT: [
                 CallbackQueryHandler(student_reviews.review_course_select_callback)
@@ -728,41 +735,41 @@ def main():
                 CallbackQueryHandler(student_reviews.review_rating_callback)
             ],
             student_reviews.REVIEW_COMMENT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, student_reviews.review_comment_input),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, student_reviews.review_comment_input),
                 CallbackQueryHandler(student_reviews.skip_comment_callback)
             ],
         },
-        fallbacks=[CommandHandler('cancel', student_reviews.cancel_review)],
+        fallbacks=[CommandHandler('cancel', student_reviews.cancel_review, filters=filters.ChatType.PRIVATE)],
     )
     application.add_handler(review_conv_handler)
 
 
 
     # Admin review viewing
-    application.add_handler(CommandHandler('viewreviews', admin_reviews.view_reviews_command))
-    application.add_handler(CommandHandler('exportreviews', admin_reviews.export_reviews_command))
+    application.add_handler(CommandHandler('viewreviews', admin_reviews.view_reviews_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler('exportreviews', admin_reviews.export_reviews_command, filters=filters.ChatType.PRIVATE))
 
     # Course reviews conversation handler
     course_reviews_conv = ConversationHandler(
-        entry_points=[CommandHandler('coursereviews', admin_reviews.course_reviews_command)],
+        entry_points=[CommandHandler('coursereviews', admin_reviews.course_reviews_command, filters=filters.ChatType.PRIVATE)],
         states={
             admin_reviews.COURSE_SELECT: [
                 CallbackQueryHandler(admin_reviews.course_select_callback)
             ],
         },
-        fallbacks=[CommandHandler('cancel', admin_reviews.cancel_review_view)],
+        fallbacks=[CommandHandler('cancel', admin_reviews.cancel_review_view, filters=filters.ChatType.PRIVATE)],
     )
     application.add_handler(course_reviews_conv)
 
     # Student preferences conversation handler
     preferences_conv = ConversationHandler(
-        entry_points=[CommandHandler('preferences', student_preferences.preferences_command)],
+        entry_points=[CommandHandler('preferences', student_preferences.preferences_command, filters=filters.ChatType.PRIVATE)],
         states={
             student_preferences.PREFERENCE_SELECT: [
                 CallbackQueryHandler(student_preferences.preference_toggle_callback)
             ],
         },
-        fallbacks=[CommandHandler('cancel', student_preferences.cancel_preferences)],
+        fallbacks=[CommandHandler('cancel', student_preferences.cancel_preferences, filters=filters.ChatType.PRIVATE)],
     )
     application.add_handler(preferences_conv)
 

@@ -1382,6 +1382,10 @@ ID: {telegram_user_id}
 async def receipt_upload_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle receipt image/document uploads with comprehensive fraud detection and S3 storage"""
     
+    # Ignore channel posts or messages without a user
+    if not update.message or update.message.chat.type != 'private':
+        return
+    
     if not context.user_data.get("awaiting_receipt_upload"):
         return
     
@@ -1434,7 +1438,75 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
     # Notify user that processing started
     await update.message.reply_text(receipt_processing_message(), reply_markup=None)
 
-    # Get expected amount
+    # --- DEDICATED CERTIFICATE UPGRADE FLOW ---
+    certificate_enrollment_id = context.user_data.get('certificate_upgrade_enrollment_id')
+    if certificate_enrollment_id:
+        expected_amount = context.user_data.get("expected_amount_for_gemini")
+        if expected_amount is None:
+            logger.error(f"User {telegram_user_id} missing expected amount for certificate.")
+            await update.message.reply_text(error_message("payment_amount_missing"), reply_markup=back_to_main_keyboard())
+            return
+        
+        try:
+            # 1. Gemini Validation
+            gemini_result = await validate_receipt_with_gemini_ai(temp_path, expected_amount, config.EXPECTED_ACCOUNTS)
+            transaction_id = gemini_result.get('transaction_id')
+            extracted_amount = gemini_result.get('amount')
+
+            # 2. Duplicate Check
+            duplicate_check = check_transaction_id_duplicate(transaction_id, internal_user_id)
+
+            if not gemini_result.get("is_valid") or duplicate_check.get('is_duplicate'):
+                reason = "Duplicate transaction ID found." if duplicate_check.get('is_duplicate') else gemini_result.get("reason", "Validation failed.")
+                await update.message.reply_text(f"❌ **فشل التحقق من إيصال الشهادة**\n\nالسبب: {reason}\n\nيرجى المحاولة مرة أخرى.", reply_markup=back_to_main_keyboard())
+                logger.warning(f"Certificate upgrade FAILED for user {telegram_user_id}, reason: {reason}")
+                return
+
+            # 3. Create Transaction Record & 4. Update Enrollment
+            course_name_for_message = "Unknown Course"
+            with get_db() as session:
+                enrollment = crud.get_enrollment_by_id(session, certificate_enrollment_id)
+                if not enrollment:
+                    await update.message.reply_text(error_message("enrollment_not_found"), reply_markup=back_to_main_keyboard())
+                    return
+                
+                if enrollment.course:
+                    course_name_for_message = enrollment.course.course_name
+
+                file_path = upload_receipt_to_s3(temp_path, internal_user_id, certificate_enrollment_id)
+                
+                transaction = crud.create_transaction(session, enrollment.enrollment_id, file_path)
+                crud.update_transaction(
+                    session,
+                    transaction.transaction_id,
+                    status=TransactionStatus.APPROVED,
+                    extracted_amount=extracted_amount,
+                    receipt_transaction_id=transaction_id,
+                    gemini_response=str(gemini_result)
+                )
+                
+                enrollment.with_certificate = True
+                enrollment.amount_paid = (enrollment.amount_paid or 0) + (extracted_amount or 0)
+                enrollment.payment_amount = (enrollment.payment_amount or 0) + (enrollment.course.certificate_price or 0)
+                
+                session.commit()
+                logger.info(f"Certificate upgrade SUCCESS for user {telegram_user_id}, enrollment {certificate_enrollment_id}")
+
+            success_message = f"✅ **تم تسجيل الشهادة بنجاح!**\n\nلقد تم تحديث تسجيلك في دورة '{course_name_for_message}' ليشمل الشهادة."
+            await update.message.reply_text(success_message, reply_markup=back_to_main_keyboard())
+
+        except Exception as e:
+            logger.error(f"Error in certificate upgrade flow for user {telegram_user_id}: {e}", exc_info=True)
+            await update.message.reply_text(error_message("processing_error"), reply_markup=back_to_main_keyboard())
+        finally:
+            context.user_data.pop('awaiting_receipt_upload', None)
+            context.user_data.pop('certificate_upgrade_enrollment_id', None)
+            context.user_data.pop('expected_amount_for_gemini', None)
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        return # End of certificate flow
+
+    # --- REGULAR PAYMENT FLOW (UNCHANGED) ---
     expected_amount_for_gemini = context.user_data.get("reupload_amount") or context.user_data.get("current_payment_total")
 
     if expected_amount_for_gemini is None:
@@ -1446,12 +1518,6 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
             os.remove(temp_path)
         return
 
-    # Run receipt processing directly in the main event loop
-    # Gemini API calls already run in a thread pool (via validate_receipt_with_gemini_ai)
-    # This ensures Telegram API calls stay in the main event loop and don't cause "Event loop is closed" errors
-    logger.info(f"Starting receipt processing for user {telegram_user_id}")
-    # Use asyncio.create_task to run it concurrently without blocking
-    # This keeps it in the main event loop where Telegram API calls work correctly
     asyncio.create_task(
         _process_receipt_async(
             update,
@@ -1463,7 +1529,7 @@ async def receipt_upload_message_handler(update: Update, context: ContextTypes.D
             user
         )
     )
-    logger.info(f"Receipt processing started as background task for user {telegram_user_id}")
+    logger.info(f"Regular receipt processing started as background task for user {telegram_user_id}")
 
 
 async def cancel_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -136,42 +136,46 @@ def cart_confirmation_keyboard() -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def my_courses_selection_keyboard(pending_enrollments: List[Enrollment], selected_ids: List[int]) -> InlineKeyboardMarkup:
-    """New keyboard for selecting pending courses to pay for - SHOWS REMAINING BALANCE"""
+def my_courses_selection_keyboard(all_enrollments: List[Enrollment], selected_ids: List[int]) -> InlineKeyboardMarkup:
+    """New keyboard that shows ALL enrollments as clickable buttons."""
     keyboard = []
-    
-    # Course selection buttons (checklist style, no numbering)
-    for enrollment in pending_enrollments:
-        is_selected = enrollment.enrollment_id in selected_ids
-        icon = "✅" if is_selected else "⬜"
+
+    # Sort enrollments to show verified first, then pending, then failed
+    all_enrollments.sort(key=lambda e: (e.payment_status.value != 'VERIFIED', e.payment_status.value != 'PENDING'))
+
+    for enrollment in all_enrollments:
         course_name = enrollment.course.course_name if enrollment.course else "دورة محذوفة"
         
-        # ✅ CALCULATE REMAINING AMOUNT (not full amount)
-        total_price = enrollment.payment_amount or 0.0
-        paid_amount = enrollment.amount_paid or 0.0
-        remaining = total_price - paid_amount
+        if enrollment.payment_status.value == 'VERIFIED':
+            # Verified courses are simple buttons linking to details
+            icon = "✅"
+            button_text = f"{icon} {course_name}"
+            callback_data = f"my_course_detail_{enrollment.enrollment_id}"
         
-        # Show remaining amount instead of full amount
-        button_text = f"{icon} {course_name} ({remaining:.0f} جنيه)"
-        
-        # FIXED: Typo `mycourse_` changed to `my_course_` to match handler pattern
-        callback_data = (
-            f"my_course_deselect_{enrollment.enrollment_id}" if is_selected
-            else f"my_course_select_{enrollment.enrollment_id}"
-        )
-        
+        else: # PENDING or FAILED
+            # These are selectable for payment
+            is_selected = enrollment.enrollment_id in selected_ids
+            icon = "✅" if is_selected else ("⏳" if enrollment.payment_status.value == 'PENDING' else "❌")
+            
+            total_price = enrollment.payment_amount or 0.0
+            paid_amount = enrollment.amount_paid or 0.0
+            remaining = total_price - paid_amount
+            
+            button_text = f"{icon} {course_name} ({remaining:.0f} جنيه)"
+            callback_data = (
+                f"my_course_deselect_{enrollment.enrollment_id}" if is_selected
+                else f"my_course_select_{enrollment.enrollment_id}"
+            )
+            
         keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
     
-    # Action buttons
+    # Action buttons for selected pending/failed items
     if selected_ids:
         action_buttons = [
             InlineKeyboardButton("دفع المحدد 💳", callback_data="pay_selected_pending"),
             InlineKeyboardButton("إلغاء المحدد 🗑️", callback_data="cancel_selected_pending")
         ]
         keyboard.append(action_buttons)
-    
-    # My Links button
-    keyboard.append([InlineKeyboardButton("🔗 روابط المجموعات | Group Links", callback_data="my_links_menu")])
 
     # Back button
     keyboard.append([InlineKeyboardButton("→ العودة للقائمة الرئيسية", callback_data=CallbackPrefix.BACK_MAIN)])

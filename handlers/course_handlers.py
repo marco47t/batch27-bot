@@ -2,8 +2,10 @@
 Course selection and cart management handlers
 """
 
+import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+from telegram.error import BadRequest
 from database import crud, get_db
 from database.models import Course, PaymentStatus
 from utils.keyboards import (
@@ -86,16 +88,23 @@ async def course_selection_menu_callback(update: Update, context: ContextTypes.D
     cart_totals = crud.calculate_cart_total(session, internal_user_id)
     cart_total = cart_totals['total']
     
-    await query.edit_message_text(
-        course_list_message(paginated_courses, course_enrollment_counts),
-        reply_markup=course_selection_keyboard(
-            paginated_courses, 
-            cart_course_ids, 
-            cart_total,
-            page=page,
-            total_pages=total_pages
+    try:
+        await query.edit_message_text(
+            course_list_message(paginated_courses, course_enrollment_counts),
+            reply_markup=course_selection_keyboard(
+                paginated_courses, 
+                cart_course_ids, 
+                cart_total,
+                page=page,
+                total_pages=total_pages
+            )
         )
-    )
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            logger.warning("Message not modified, skipping edit in course_selection_menu_callback.")
+            pass
+        else:
+            raise
 
 
 
@@ -122,10 +131,17 @@ async def course_details_menu_callback(update: Update, context: ContextTypes.DEF
     from utils.keyboards import course_details_keyboard
     paginated_keyboard = course_details_keyboard(courses, page=page)
 
-    await query.edit_message_text(
-        "📚 اختر دورة لعرض التفاصيل:",
-        reply_markup=paginated_keyboard
-    )
+    try:
+        await query.edit_message_text(
+            "📚 اختر دورة لعرض التفاصيل:",
+            reply_markup=paginated_keyboard
+        )
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            logger.warning("Message not modified, skipping edit in course_details_menu_callback.")
+            pass
+        else:
+            raise
 
 
 async def course_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -165,11 +181,18 @@ async def course_detail_callback(update: Update, context: ContextTypes.DEFAULT_T
         from utils.keyboards import course_info_buttons_keyboard
         
         # Show BRIEF summary instead of full details
-        await query.edit_message_text(
-            course_summary_message(course, enrollment_count),
-            reply_markup=course_info_buttons_keyboard(course_id, courses, current_course_index),
-            parse_mode='Markdown'
-        )
+        try:
+            await query.edit_message_text(
+                course_summary_message(course, enrollment_count),
+                reply_markup=course_info_buttons_keyboard(course_id, courses, current_course_index),
+                parse_mode='Markdown'
+            )
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                logger.warning("Message not modified, skipping edit in course_detail_callback.")
+                pass
+            else:
+                raise
 
 
 # ADD these 2 NEW handlers after course_detail_callback:
@@ -198,11 +221,18 @@ async def course_description_callback(update: Update, context: ContextTypes.DEFA
         
         message = course_description_details(course, session)
         
-        await query.edit_message_text(
-            message,
-            reply_markup=course_info_buttons_keyboard(course_id, courses, current_course_index),
-            parse_mode='Markdown'
-        )
+        try:
+            await query.edit_message_text(
+                message,
+                reply_markup=course_info_buttons_keyboard(course_id, courses, current_course_index),
+                parse_mode='Markdown'
+            )
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                logger.warning("Message not modified, skipping edit in course_description_callback.")
+                pass
+            else:
+                raise
 
 
 
@@ -229,11 +259,18 @@ async def course_dates_callback(update: Update, context: ContextTypes.DEFAULT_TY
         from utils.messages import course_dates_details
         from utils.keyboards import course_info_buttons_keyboard
         
-        await query.edit_message_text(
-            course_dates_details(course),
-            reply_markup=course_info_buttons_keyboard(course_id, courses, current_course_index),
-            parse_mode='Markdown'
-        )
+        try:
+            await query.edit_message_text(
+                course_dates_details(course),
+                reply_markup=course_info_buttons_keyboard(course_id, courses, current_course_index),
+                parse_mode='Markdown'
+            )
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                logger.warning("Message not modified, skipping edit in course_dates_callback.")
+                pass
+            else:
+                raise
 
 
 async def course_instructor_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -276,6 +313,18 @@ async def course_instructor_callback(update: Update, context: ContextTypes.DEFAU
                 reply_markup=InlineKeyboardMarkup(keyboard_buttons),
                 parse_mode='Markdown'
             )
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                logger.warning("Message not modified, skipping edit in course_instructor_callback.")
+                pass
+            else:
+                # If Markdown fails, send without parse_mode
+                logger.error(f"Markdown parsing error for instructor details: {e}")
+                await query.edit_message_text(
+                    message,
+                    reply_markup=InlineKeyboardMarkup(keyboard_buttons),
+                    parse_mode=None  # NO FORMATTING
+                )
         except Exception as e:
             # If Markdown fails, send without parse_mode
             logger.error(f"Markdown parsing error for instructor details: {e}")
@@ -324,15 +373,12 @@ async def register_course_callback(update: Update, context: ContextTypes.DEFAULT
             logger.info(f"User {telegram_user_id} needs to provide legal name first")
             
             await query.edit_message_text(
-                "📝 *تسجيل الاسم القانوني مطلوب | Legal Name Required*\n\n"
-                "قبل إتمام التسجيل، نحتاج إلى اسمك الرباعي الكامل كما هو مكتوب في المستندات الرسمية.\n"
-                "Before completing registration, we need your full four-part name as written on official documents.\n\n"
-                "⚠️ *مهم جداً | Very Important:*\n"
-                "• يجب أن يكون الاسم باللغة الإنجليزية\n"
-                "• Must be in English\n"
-                "• الاسم الرباعي: (اسمك - اسم والدك - اسم جدك - اسم جد والدك)\n"
-                "• Four parts: (Your name - Father - Grandfather - Great-grandfather)\n\n"
-                "🔹 *الخطوة 1/4:* أدخل اسمك الأول",
+                "📝 **تسجيل الاسم القانوني مطلوب**\n\n"
+                "قبل إتمام التسجيل، نحتاج إلى اسمك الرباعي الكامل باللغة الإنجليزية كما هو مكتوب في المستندات الرسمية.\n\n"
+                "⚠️ **مهم جداً:**\n"
+                "• يجب أن يكون الاسم باللغة الإنجليزية.\n"
+                "• الاسم الرباعي: (اسمك - اسم والدك - اسم جدك - اسم جد والدك).\n\n"
+                "🔹 **الرجاء إرسال اسمك الكامل الآن.**",
                 parse_mode='Markdown'
             )
 
@@ -352,11 +398,18 @@ async def register_course_callback(update: Update, context: ContextTypes.DEFAULT
             هل تريد التسجيل مع شهادة؟
             Do you want to register with a certificate?
             """
+        try:
             await query.edit_message_text(
                 message,
                 reply_markup=certificate_option_keyboard(course_id, register_flow=True),
                 parse_mode='HTML'
             )
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                logger.warning("Message not modified, skipping edit in register_course_callback.")
+                pass
+            else:
+                raise
             return
         else:
             # No certificate, proceed directly to payment
@@ -506,10 +559,17 @@ async def course_select_callback(update: Update, context: ContextTypes.DEFAULT_T
     # Calculate cart total
     cart_totals = crud.calculate_cart_total(session, internal_user_id)
     cart_total = cart_totals['total']
-    await query.edit_message_text(
-        course_list_message(available_courses, course_enrollment_counts),
-        reply_markup=course_selection_keyboard(available_courses, cart_course_ids, cart_total)
-    )
+    try:
+        await query.edit_message_text(
+            course_list_message(available_courses, course_enrollment_counts),
+            reply_markup=course_selection_keyboard(available_courses, cart_course_ids, cart_total)
+        )
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            logger.warning("Message not modified, skipping edit in course_select_callback.")
+            pass
+        else:
+            raise
 
     
     logger.info(f"Updated message sent to user {telegram_user_id}")
@@ -574,10 +634,17 @@ async def course_deselect_callback(update: Update, context: ContextTypes.DEFAULT
     logger.info(f"User {telegram_user_id} removed course {course_id} from cart")
     log_user_action(telegram_user_id, "course_deselected", f"course_id={course_id}")
     
-    await query.edit_message_text(
-        course_list_message(available_courses, course_enrollment_counts),
-        reply_markup=course_selection_keyboard(available_courses, cart_course_ids, cart_total)
-    )
+    try:
+        await query.edit_message_text(
+            course_list_message(available_courses, course_enrollment_counts),
+            reply_markup=course_selection_keyboard(available_courses, cart_course_ids, cart_total)
+        )
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            logger.warning("Message not modified, skipping edit in course_deselect_callback.")
+            pass
+        else:
+            raise
 
 async def view_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """View shopping cart with pending courses showing remaining balance"""
@@ -650,11 +717,18 @@ async def view_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 total += remaining
         
         # ✅ PASS PENDING ENROLLMENTS TO MESSAGE FUNCTION
-        await query.edit_message_text(
-            cart_text,  # We already built this above
-            reply_markup=cart_keyboard(),
-            parse_mode='Markdown'
-        )
+        try:
+            await query.edit_message_text(
+                cart_text,  # We already built this above
+                reply_markup=cart_keyboard(),
+                parse_mode='Markdown'
+            )
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                logger.warning("Message not modified, skipping edit in view_cart_callback.")
+                pass
+            else:
+                raise
         
         logger.info(f"User {telegram_user_id} cart: {len(cart_items)} new items + {len(pending_enrollments)} pending, total={total:.0f}")
         
@@ -686,16 +760,12 @@ async def confirm_cart_callback(update: Update, context: ContextTypes.DEFAULT_TY
             logger.info(f"User {telegram_user_id} needs to provide legal name first")
             
             await query.edit_message_text(
-                "📝 *تسجيل الاسم القانوني مطلوب | Legal Name Required*\n\n"
-                "قبل إتمام التسجيل، نحتاج إلى اسمك الرباعي الكامل كما هو مكتوب في المستندات الرسمية.\n"
-                "Before completing registration, we need your full four-part name as written on official documents.\n\n"
-                "⚠️ *مهم جداً | Very Important:*\n"
-                "• يجب أن يكون الاسم باللغة الإنجليزية\n"
-                "• Must be in English\n"
-                "• الاسم الرباعي: (اسمك - اسم والدك - اسم جدك - اسم جد والدك)\n"
-                "• Four parts: (Your name - Father - Grandfather - Great-grandfather)\n\n"
-                "🔹 *الخطوة 1/4:* أدخل اسمك الأول\n"
-                "🔹 *Step 1/4:* Enter your first name",
+                "📝 **تسجيل الاسم القانوني مطلوب**\n\n"
+                "قبل إتمام التسجيل، نحتاج إلى اسمك الرباعي الكامل باللغة الإنجليزية كما هو مكتوب في المستندات الرسمية.\n\n"
+                "⚠️ **مهم جداً:**\n"
+                "• يجب أن يكون الاسم باللغة الإنجليزية.\n"
+                "• الاسم الرباعي: (اسمك - اسم والدك - اسم جدك - اسم جد والدك).\n\n"
+                "🔹 **الرجاء إرسال اسمك الكامل الآن.**",
                 parse_mode='Markdown'
             )
             
@@ -710,15 +780,53 @@ async def confirm_cart_callback(update: Update, context: ContextTypes.DEFAULT_TY
         
         if not cart_items:
             logger.warning(f"User {telegram_user_id} tried to confirm empty cart")
+        try:
             await query.edit_message_text(
                 error_message("cart_empty"),
                 reply_markup=back_to_main_keyboard()
             )
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                logger.warning("Message not modified, skipping edit in confirm_cart_callback.")
+                pass
+            else:
+                raise
             return
         
         # ✅ Calculate total with certificates
         cart_totals = crud.calculate_cart_total(session, internal_user_id)
         total = cart_totals['total']
+
+        # --- NEW: HANDLE FREE REGISTRATION ---
+        if total == 0:
+            logger.info(f"User {telegram_user_id} is registering for a free course.")
+            enrollment_ids = []
+            for item in cart_items:
+                enrollment = crud.create_enrollment(session, internal_user_id, item.course_id, 0)
+                enrollment.with_certificate = item.with_certificate
+                enrollment.payment_status = PaymentStatus.VERIFIED # Directly verify
+                enrollment.verification_date = datetime.now()
+                enrollment_ids.append(enrollment.enrollment_id)
+            
+            session.commit()
+            crud.clear_user_cart(session, internal_user_id)
+            session.commit()
+
+            await query.edit_message_text(
+                "✅ **تم التسجيل بنجاح!**\n\nلقد تم تسجيلك في الدورة (الدورات) المجانية.\nيمكنك الآن العثور عليها في قسم 'دوراتي'.",
+                reply_markup=back_to_main_keyboard(),
+                parse_mode='Markdown'
+            )
+            
+            # Also send group invite links for free courses
+            from handlers.group_registration import send_course_invite_link
+            for eid in enrollment_ids:
+                enrollment = crud.get_enrollment_by_id(session, eid)
+                if enrollment:
+                    await send_course_invite_link(update, context, telegram_user_id, enrollment.course_id)
+
+            return # End of free registration flow
+        # --- END OF NEW LOGIC ---
         
         # Create pending enrollments using internal ID
         enrollment_ids = []
@@ -798,130 +906,95 @@ async def clear_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     logger.info(f"Cart cleared for user {telegram_user_id}")
     log_user_action(telegram_user_id, "cart_cleared", "")
     
-    await query.edit_message_text(
-        "🗑️ تم تفريغ السلة",
-        reply_markup=courses_menu_keyboard()
-    )
+    try:
+        await query.edit_message_text(
+            "🗑️ تم تفريغ السلة",
+            reply_markup=courses_menu_keyboard()
+        )
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            logger.warning("Message not modified, skipping edit in clear_cart_callback.")
+            pass
+        else:
+            raise
 
 async def handle_legal_name_during_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle legal name collection during course registration AND course details registration"""
+    """Handle legal name collection during course registration in a single step."""
     
+    # Exit early if user_data is not available (e.g., in a channel)
+    if not context.user_data:
+        return
+
+    # Only proceed if this is a private chat
+    if update.effective_chat.type != 'private':
+        return # Not a private chat, let other handlers process
+
     # Check if we're collecting legal name
     if not context.user_data.get('collecting_legal_name_for_registration'):
         return  # Let other handlers process this message
     
     user = update.effective_user
-    text = update.message.text.strip()
+    full_name_input = update.message.text.strip()
     
     # Validate English only
-    if not text.replace(' ', '').isalpha() or not text.isascii():
+    if not full_name_input.replace(' ', '').isalpha() or not full_name_input.isascii():
         await update.message.reply_text(
-            "❌ يجب أن يكون الاسم باللغة الإنجليزية فقط\n"
-            "❌ Name must be in English only\n\n"
-            "الرجاء إدخال الاسم مرة أخرى.\nPlease enter the name again.",
+            "❌ يجب أن يكون الاسم باللغة الإنجليزية فقط.\n\n"
+            "الرجاء إدخال الاسم كاملاً مرة أخرى.",
             parse_mode='Markdown'
         )
         return  # Stay in current step
     
-    # Determine which step we're on
-    if 'legal_name_first' not in context.user_data:
-        # Step 1: First name
-        context.user_data['legal_name_first'] = text
-        await update.message.reply_text(
-            f"✅ تم حفظ: {text}\n\n"
-            "🔹 *الخطوة 2/4:* أدخل اسم والدك\n"
-            "🔹 *Step 2/4:* Enter your father's name",
-            parse_mode='Markdown'
+    with get_db() as session:
+        internal_user_id = context.user_data.get('registration_internal_user_id')
+        course_detail_course_id = context.user_data.get('course_detail_course_id')
+        
+        if not internal_user_id:
+            await update.message.reply_text("❌ حدث خطأ. يرجى المحاولة مرة أخرى.", reply_markup=back_to_main_keyboard())
+            context.user_data.clear()
+            return
+        
+        # Save legal name (full name in legal_name_first)
+        success = crud.update_user_legal_name(
+            session,
+            internal_user_id,
+            full_name_input, # Store full name here
+            "", # Clear other parts
+            "", # Clear other parts
+            ""  # Clear other parts
         )
-        return
-    
-    elif 'legal_name_father' not in context.user_data:
-        # Step 2: Father's name
-        context.user_data['legal_name_father'] = text
-        await update.message.reply_text(
-            f"✅ تم حفظ: {text}\n\n"
-            "🔹 *الخطوة 3/4:* أدخل اسم جدك\n"
-            "🔹 *Step 3/4:* Enter your grandfather's name",
-            parse_mode='Markdown'
-        )
-        return
-    
-    elif 'legal_name_grandfather' not in context.user_data:
-        # Step 3: Grandfather's name
-        context.user_data['legal_name_grandfather'] = text
-        await update.message.reply_text(
-            f"✅ تم حفظ: {text}\n\n"
-            "🔹 *الخطوة 4/4:* أدخل اسم جد والدك\n"
-            "🔹 *Step 4/4:* Enter your great-grandfather's name",
-            parse_mode='Markdown'
-        )
-        return
-    
-    else:
-        # Step 4: Great-grandfather's name - Save and proceed
-        with get_db() as session:
-            internal_user_id = context.user_data.get('registration_internal_user_id')
-            course_detail_course_id = context.user_data.get('course_detail_course_id')  # ← NEW
-            
-            if not internal_user_id:
-                await update.message.reply_text(
-                    "❌ حدث خطأ. يرجى المحاولة مرة أخرى.\n"
-                    "❌ An error occurred. Please try again.",
-                    reply_markup=back_to_main_keyboard()
-                )
-                context.user_data.clear()
-                return
-            
-            # Save legal name
-            success = crud.update_user_legal_name(
-                session,
-                internal_user_id,
-                context.user_data['legal_name_first'],
-                context.user_data['legal_name_father'],
-                context.user_data['legal_name_grandfather'],
-                text
+        
+        if success:
+            await update.message.reply_text(
+                "✅ **تم حفظ اسمك القانوني بنجاح!**\n\n"
+                f"📋 **الاسم الكامل:**\n{full_name_input}\n\n"
+                "جاري المتابعة...",
+                parse_mode='Markdown'
             )
             
-            if success:
-                full_name = (
-                    f"{context.user_data['legal_name_first']} "
-                    f"{context.user_data['legal_name_father']} "
-                    f"{context.user_data['legal_name_grandfather']} "
-                    f"{text}"
-                )
+            logger.info(f"Legal name saved for user {internal_user_id}: {full_name_input}")
+            
+            # Clear legal name collection flags
+            context.user_data.pop('collecting_legal_name_for_registration', None)
+            context.user_data.pop('registration_internal_user_id', None)
+            context.user_data.pop('legal_name_first', None)
+            context.user_data.pop('legal_name_father', None)
+            context.user_data.pop('legal_name_grandfather', None)
+            context.user_data.pop('course_detail_course_id', None)
+            
+            # Check if this was from course details registration
+            if course_detail_course_id:
+                logger.info(f"Legal name saved for course detail registration, course_id={course_detail_course_id}")
                 
-                await update.message.reply_text(
-                    "✅ *تم حفظ اسمك القانوني بنجاح!*\n"
-                    "✅ *Legal name saved successfully!*\n\n"
-                    f"📋 *الاسم الكامل | Full Name:*\n{full_name}\n\n"
-                    "جاري المتابعة...\n"
-                    "Proceeding...",
-                    parse_mode='Markdown'
-                )
-                
-                logger.info(f"Legal name saved for user {internal_user_id}: {full_name}")
-                
-                # Clear legal name collection flags
-                context.user_data.pop('collecting_legal_name_for_registration', None)
-                context.user_data.pop('registration_internal_user_id', None)
-                context.user_data.pop('legal_name_first', None)
-                context.user_data.pop('legal_name_father', None)
-                context.user_data.pop('legal_name_grandfather', None)
-                context.user_data.pop('course_detail_course_id', None)  # ← NEW
-                
-                # ✅ NEW: Check if this was from course details registration
-                if course_detail_course_id:
-                    logger.info(f"Legal name saved for course detail registration, course_id={course_detail_course_id}")
-                    
-                    # Proceed with course detail certificate check
-                    course = crud.get_course_by_id(session, course_detail_course_id)
+                # Proceed with course detail certificate check
+                course = crud.get_course_by_id(session, course_detail_course_id)
 
-                    if not course:
-                        await update.message.reply_text("❌ الدورة غير موجودة.")
-                        return
+                if not course:
+                    await update.message.reply_text("❌ الدورة غير موجودة.")
+                    return
 
-                    if course.certificate_available and course.certificate_price > 0:
-                        message = f"""
+                if course.certificate_available and course.certificate_price > 0:
+                    message = f"""
 📚 {course.course_name}
 
 💰 سعر الدورة: {course.price:.0f} SDG
@@ -929,95 +1002,88 @@ async def handle_legal_name_during_registration(update: Update, context: Context
 📜 سعر الشهادة: {course.certificate_price:.0f} SDG
 
 هل تريد التسجيل مع شهادة؟
-
-Do you want to register with a certificate?
-
 """
-                        keyboard = certificate_option_keyboard(course_detail_course_id, register_flow=True)
-                        
-                        await update.message.reply_text(
-                            message,
-                            reply_markup=keyboard,
-                            parse_mode='HTML'
-                        )
-                    else:
-                        # No certificate, proceed directly to payment
-                        payment_amount = course.price
-
-                        enrollment = crud.create_enrollment(session, internal_user_id, course.course_id, payment_amount)
-                        enrollment.with_certificate = False
-                        session.commit()
-
-                        context.user_data['cart_total_for_payment'] = payment_amount
-                        context.user_data['pending_enrollment_ids_for_payment'] = [enrollment.enrollment_id]
-                        context.user_data['awaiting_receipt_upload'] = True
-                        context.user_data['expected_amount_for_gemini'] = payment_amount
-
-                        from handlers.payment_handlers import proceed_to_payment_callback
-
-                        await proceed_to_payment_callback(update, context)
-                
-                else:
-                    # ✅ EXISTING: Cart registration flow (all your existing code)
-                    logger.info(f"Legal name saved for cart registration")
-                    
-                    # Now proceed with cart confirmation
-                    cart_items = crud.get_user_cart(session, internal_user_id)
-                    
-                    if not cart_items:
-                        await update.message.reply_text(
-                            "❌ عربة التسوق فارغة\n❌ Cart is empty",
-                            reply_markup=back_to_main_keyboard()
-                        )
-                        return
-                    
-                    cart_totals = crud.calculate_cart_total(session, internal_user_id)
-                    total = cart_totals['total']
-
-                    # Create pending enrollments with certificate info
-                    enrollment_ids = []
-                    for item in cart_items:
-                        course = item.course
-                        
-                        # Calculate payment amount including certificate
-                        payment_amount = course.price
-                        if item.with_certificate and course.certificate_available:
-                            payment_amount += course.certificate_price
-                        
-                        enrollment = crud.create_enrollment(session, internal_user_id, course.course_id, payment_amount)
-                        enrollment.with_certificate = item.with_certificate
-                        enrollment_ids.append(enrollment.enrollment_id)
-                        logger.info(f"Created enrollment {enrollment.enrollment_id} for user {internal_user_id}, amount: {payment_amount}")
-
-                    session.commit()
-
-                    # Clear cart after creating enrollments
-                    crud.clear_user_cart(session, internal_user_id)
-                    session.commit()
-                    
-                    # Store in context for payment
-                    context.user_data['cart_total_for_payment'] = total
-                    context.user_data['pending_enrollment_ids_for_payment'] = enrollment_ids
-                    context.user_data['awaiting_receipt_upload'] = True
-                    context.user_data['current_payment_total'] = total
-                    context.user_data['current_payment_enrollment_ids'] = enrollment_ids
-                    
-                    # Send payment instructions
-                    from utils.messages import payment_instructions_message
-                    from utils.keyboards import payment_upload_keyboard
+                    keyboard = certificate_option_keyboard(course_detail_course_id, register_flow=True)
                     
                     await update.message.reply_text(
-                        payment_instructions_message(total),
-                        reply_markup=payment_upload_keyboard(),
-                        parse_mode='Markdown'
+                        message,
+                        reply_markup=keyboard,
+                        parse_mode='HTML'
                     )
+                else:
+                    # No certificate, proceed directly to payment
+                    payment_amount = course.price
+
+                    enrollment = crud.create_enrollment(session, internal_user_id, course.course_id, payment_amount)
+                    enrollment.with_certificate = False
+                    session.commit()
+
+                    context.user_data['cart_total_for_payment'] = payment_amount
+                    context.user_data['pending_enrollment_ids_for_payment'] = [enrollment.enrollment_id]
+                    context.user_data['awaiting_receipt_upload'] = True
+                    context.user_data['expected_amount_for_gemini'] = payment_amount
+
+                    from handlers.payment_handlers import proceed_to_payment_callback
+
+                    await proceed_to_payment_callback(update, context)
+            
             else:
+                # Cart registration flow
+                logger.info(f"Legal name saved for cart registration")
+                
+                # Now proceed with cart confirmation
+                cart_items = crud.get_user_cart(session, internal_user_id)
+                
+                if not cart_items:
+                    await update.message.reply_text(
+                        "❌ عربة التسوق فارغة",
+                        reply_markup=back_to_main_keyboard()
+                    )
+                    return
+                
+                cart_totals = crud.calculate_cart_total(session, internal_user_id)
+                total = cart_totals['total']
+
+                # Create pending enrollments with certificate info
+                enrollment_ids = []
+                for item in cart_items:
+                    course = item.course
+                    
+                    # Calculate payment amount including certificate
+                    payment_amount = course.price
+                    if item.with_certificate and course.certificate_available:
+                        payment_amount += course.certificate_price
+                    
+                    enrollment = crud.create_enrollment(session, internal_user_id, course.course_id, payment_amount)
+                    enrollment.with_certificate = item.with_certificate
+                    enrollment_ids.append(enrollment.enrollment_id)
+                    logger.info(f"Created enrollment {enrollment.enrollment_id} for user {internal_user_id}, amount: {payment_amount}")
+
+                session.commit()
+
+                # Clear cart after creating enrollments
+                crud.clear_user_cart(session, internal_user_id)
+                session.commit()
+                
+                # Store in context for payment
+                context.user_data['cart_total_for_payment'] = total
+                context.user_data['pending_enrollment_ids_for_payment'] = enrollment_ids
+                context.user_data['awaiting_receipt_upload'] = True
+                context.user_data['current_payment_total'] = total
+                context.user_data['current_payment_enrollment_ids'] = enrollment_ids
+                
+                # Send payment instructions
+                from utils.messages import payment_instructions_message
+                from utils.keyboards import payment_upload_keyboard
+                
                 await update.message.reply_text(
-                    "❌ حدث خطأ أثناء حفظ الاسم. يرجى المحاولة مرة أخرى.\n"
-                    "❌ Error saving name. Please try again.",
-                    reply_markup=back_to_main_keyboard()
+                    payment_instructions_message(total),
+                    reply_markup=payment_upload_keyboard(),
+                    parse_mode='Markdown'
                 )
-                context.user_data.clear()
+        else:
+            await update.message.reply_text("❌ حدث خطأ أثناء حفظ الاسم. يرجى المحاولة مرة أخرى.", reply_markup=back_to_main_keyboard())
+            context.user_data.clear()
 
 
 
@@ -1049,11 +1115,18 @@ async def course_add_to_cart_callback(update: Update, context: ContextTypes.DEFA
 هل تريد التسجيل مع شهادة؟
 Do you want to register with a certificate?
 """
-            await query.edit_message_text(
-                message,
-                reply_markup=certificate_option_keyboard(course_id),
-                parse_mode='HTML'
-            )
+            try:
+                await query.edit_message_text(
+                    message,
+                    reply_markup=certificate_option_keyboard(course_id),
+                    parse_mode='HTML'
+                )
+            except BadRequest as e:
+                if "Message is not modified" in str(e):
+                    logger.warning("Message not modified, skipping edit in course_add_to_cart_callback.")
+                    pass
+                else:
+                    raise
         else:
             # No certificate available, add directly to cart
             crud.add_to_cart_with_certificate(session, user.user_id, course_id, with_certificate=False)
@@ -1083,11 +1156,14 @@ async def register_certificate_choice_callback(update: Update, context: ContextT
         
         course = session.query(Course).filter(Course.course_id == course_id).first()
         
-        if not course:
+        try:
             await query.edit_message_text("❌ الدورة غير موجودة")
-            return
-        
-        # Create pending enrollment directly
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                logger.warning("Message not modified, skipping edit in register_certificate_choice_callback.")
+                pass
+            else:
+                raise
         payment_amount = course.price
         if with_certificate:
             payment_amount += course.certificate_price
@@ -1161,8 +1237,15 @@ Added to cart!
 🛒 إجمالي السلة: {cart_total:.0f} SDG
 """
         
-        await query.edit_message_text(
-            message,
-            reply_markup=course_selection_keyboard(available_courses, selected_course_ids, cart_total)
-        )
+        try:
+            await query.edit_message_text(
+                message,
+                reply_markup=course_selection_keyboard(available_courses, selected_course_ids, cart_total)
+            )
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                logger.warning("Message not modified, skipping edit in certificate_choice_callback.")
+                pass
+            else:
+                raise
 

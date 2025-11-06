@@ -5,6 +5,7 @@ Admin dashboard and commands
 from venv import logger
 from telegram import Update
 from telegram.ext import ContextTypes
+from telegram.error import BadRequest
 from utils.keyboards import admin_menu_keyboard, admin_transaction_keyboard, back_to_main_keyboard
 from utils.messages import admin_stats_message, admin_transaction_message, error_message
 from utils.helpers import is_admin_user, send_admin_notification
@@ -40,11 +41,18 @@ async def admin_stats_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     with get_db() as session:
         stats = crud.get_enrollment_stats(session)
         
-    await query.edit_message_text(
-        admin_stats_message(stats),
-        reply_markup=admin_menu_keyboard(),
-        parse_mode='Markdown'
-    )
+    try:
+        await query.edit_message_text(
+            admin_stats_message(stats),
+            reply_markup=admin_menu_keyboard(),
+            parse_mode='Markdown'
+        )
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            logger.warning("Message not modified, skipping edit in admin_stats_callback.")
+            pass
+        else:
+            raise
 
 async def admin_pending_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show all pending/rejected transactions for manual review"""
@@ -71,8 +79,15 @@ async def admin_pending_callback(update: Update, context: ContextTypes.DEFAULT_T
                 else:
                     # Message is identical, just answer the callback without editing
                     await query.answer("No pending transactions found.", show_alert=False)
+            except BadRequest as e:
+                if "Message is not modified" in str(e):
+                    logger.warning("Message not modified, skipping edit in admin_pending_callback (no pending transactions).")
+                    pass
+                else:
+                    raise
             except Exception as e:
                 # Fallback: just answer the callback
+                logger.error(f"Error editing message in admin_pending_callback (no pending transactions): {e}")
                 await query.answer("No pending transactions.", show_alert=False)
             return
         
@@ -85,6 +100,12 @@ async def admin_pending_callback(update: Update, context: ContextTypes.DEFAULT_T
                 reply_markup=admin_transaction_keyboard(transaction.transaction_id),
                 parse_mode='Markdown'
             )
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                logger.warning("Message not modified, skipping edit in admin_pending_callback (display transaction).")
+                pass
+            else:
+                raise
         except Exception as e:
             if "message is not modified" in str(e).lower():
                 await query.answer("Already viewing this transaction.", show_alert=False)
@@ -206,15 +227,23 @@ async def admin_approve_callback(update: Update, context: ContextTypes.DEFAULT_T
         from handlers.group_registration import send_course_invite_link
         await send_course_invite_link(update, context, user_chat_id, enrollment.course_id)
         
+    final_text = f"✅ تم قبول المعاملة {transaction_id} بواسطة {admin_user.first_name}.\n\n✉️ تم إشعار المستخدم بنجاح."
+
     # Edit the original admin message (notification or panel) to show it's completed
-    final_text = f"✅ Transaction {transaction_id} approved by {admin_user.first_name}."
     try:
         if query.message.caption:
             await query.edit_message_caption(caption=final_text, reply_markup=None)
         else:
             await query.edit_message_text(text=final_text, reply_markup=None)
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            logger.warning("Message not modified, skipping edit in admin_approve_callback.")
+            pass
+        else:
+            raise
     except Exception as e:
         # Fallback if editing fails
+        logger.error(f"Error editing message in admin_approve_callback: {e}")
         await query.message.reply_text(final_text)
 
 async def admin_reject_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -239,7 +268,14 @@ async def admin_reject_callback(update: Update, context: ContextTypes.DEFAULT_TY
             await query.edit_message_caption(caption=prompt_text, reply_markup=None)
         else:
             await query.edit_message_text(text=prompt_text, reply_markup=None)
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            logger.warning("Message not modified, skipping edit in admin_reject_callback.")
+            pass
+        else:
+            raise
     except Exception as e:
+        logger.error(f"Error editing message in admin_reject_callback: {e}")
         await query.message.reply_text(prompt_text)
 
 async def rejection_reason_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -462,7 +498,14 @@ async def admin_approve_failed_callback(update: Update, context: ContextTypes.DE
     final_text = f"✅ Enrollments {enrollment_ids_str} approved by {admin_user.first_name}.\n\n✉️ User {telegram_user_id} has been notified."
     try:
         await query.edit_message_caption(caption=final_text, reply_markup=None)
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            logger.warning("Message not modified, skipping edit in admin_approve_failed_callback.")
+            pass
+        else:
+            raise
     except Exception as e:
+        logger.error(f"Error editing message in admin_approve_failed_callback: {e}")
         await query.message.reply_text(final_text)
 
 
@@ -490,7 +533,14 @@ async def admin_reject_failed_callback(update: Update, context: ContextTypes.DEF
     
     try:
         await query.edit_message_caption(caption=prompt_text, reply_markup=None)
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            logger.warning("Message not modified, skipping edit in admin_reject_failed_callback.")
+            pass
+        else:
+            raise
     except Exception as e:
+        logger.error(f"Error editing message in admin_reject_failed_callback: {e}")
         await query.message.reply_text(prompt_text)
 
 
@@ -558,18 +608,11 @@ async def failed_rejection_reason_handler(update: Update, context: ContextTypes.
     # Notify user
     if user_chat_id:
         rejection_message = f"""
-❌ **تم رفض دفعتك / Payment Rejected**
+❌ **تم رفض دفعتك**
 
-للأسف، لم يتم قبول الإيصال المرسل.
-Unfortunately, the submitted receipt was not accepted.
+**السبب:** {reason}
 
-**السبب / Reason:** {reason}
-
-يرجى إرسال إيصال صحيح من قائمة "دوراتي" → "دفع".
-Please submit a valid receipt from "My Courses" → "Pay".
-
-إذا كانت لديك أية استفسارات، يرجى التواصل مع الإدارة.
-If you have any questions, please contact administration.
+الرجاء إرسال إيصال صحيح من قائمة "دوراتي".
 """
         try:
             await context.bot.send_message(
@@ -578,19 +621,19 @@ If you have any questions, please contact administration.
                 parse_mode='Markdown'
             )
             await update.message.reply_text(
-                f"❌ Enrollments {enrollment_ids_str} rejected.\n\n**Reason:** {reason}\n\n✉️ User {telegram_user_id} has been notified and can resubmit.",
+                f"❌ تم رفض التسجيلات {enrollment_ids_str}.\n\n**السبب:** {reason}\n\n✉️ تم إشعار المستخدم {telegram_user_id} ويمكنه المحاولة مرة أخرى.",
                 reply_markup=admin_menu_keyboard(),
                 parse_mode='Markdown'
             )
         except Exception as e:
             await update.message.reply_text(
-                f"❌ Enrollments {enrollment_ids_str} rejected.\n\n**Reason:** {reason}\n\n⚠️ Failed to notify user.",
+                f"❌ تم رفض التسجيلات {enrollment_ids_str}.\n\n**السبب:** {reason}\n\n⚠️ فشل إشعار المستخدم.",
                 reply_markup=admin_menu_keyboard(),
                 parse_mode='Markdown'
             )
     else:
         await update.message.reply_text(
-            f"❌ Enrollments {enrollment_ids_str} rejected: {reason}",
+            f"❌ تم رفض التسجيلات {enrollment_ids_str}: {reason}",
             reply_markup=admin_menu_keyboard()
         )
     

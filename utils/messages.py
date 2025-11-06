@@ -159,29 +159,29 @@ def course_detail_message(course, enrollment_count: int = 0) -> str:
     # Registration period information
     registration_info = ""
     if course.registration_open_date or course.registration_close_date:
-        registration_info = "\n\n📅 فترة التسجيل / Registration Period:"
+        registration_info = "\n\n📅 فترة التسجيل:"
         if course.registration_open_date:
             reg_open_str = course.registration_open_date.strftime('%Y-%m-%d')
-            registration_info += f"\n🟢 يفتح / Opens: {reg_open_str}"
+            registration_info += f"\n🟢 يفتح: {reg_open_str}"
             if datetime.now() < course.registration_open_date:
-                registration_info += " (قريباً / Coming Soon)"
+                registration_info += " (قريباً)"
         
         if course.registration_close_date:
             reg_close_str = course.registration_close_date.strftime('%Y-%m-%d')
-            registration_info += f"\n🔴 يغلق / Closes: {reg_close_str}"
+            registration_info += f"\n🔴 يغلق: {reg_close_str}"
             if datetime.now() > course.registration_close_date:
-                registration_info += " (مغلق / Closed)"
+                registration_info += " (مغلق)"
     
     # Course period information
     course_period_info = ""
     if course.start_date or course.end_date:
-        course_period_info = "\n\n📚 مدة الدورة / Course Duration:"
+        course_period_info = "\n\n📚 مدة الدورة:"
         if course.start_date:
             start_str = course.start_date.strftime('%Y-%m-%d')
-            course_period_info += f"\n▶️ البداية / Start: {start_str}"
+            course_period_info += f"\n▶️ البداية: {start_str}"
         if course.end_date:
             end_str = course.end_date.strftime('%Y-%m-%d')
-            course_period_info += f"\n🏁 النهاية / End: {end_str}"
+            course_period_info += f"\n🏁 النهاية: {end_str}"
     
     # Group link
     if course.telegram_group_link:
@@ -259,56 +259,43 @@ def payment_failed_message(reason: str) -> str:
     return f"""
 {issue}
 
-⚠️ المشكلة:
 {details}
 
-💡 ما يجب فعله:
-✓ تأكد من وضوح الصورة
-✓ تحقق من رقم الحساب: {accounts_display}
-✓ تأكد من المبلغ المحول بالجنيه السوداني (SDG)
-
+الرجاء التأكد من صحة الإيصال والمحاولة مرة أخرى.
 سيتم مراجعة الإيصال يدوياً من قبل الإدارة.
 """
 
 
 def my_courses_message(enrollments: list, pending_count: int = 0, selected_count: int = 0, total_selected: float = 0.0) -> str:
-    """Display user's enrolled courses with selection status"""
+    """Display user's enrolled courses with selection status in a unified list."""
     if not enrollments:
         return "📋 لا توجد دورات مسجلة\n\nسجل في الدورات من القائمة الرئيسية."
-    
-    verified = [e for e in enrollments if e.payment_status.value == "VERIFIED"]
-    pending = [e for e in enrollments if e.payment_status.value == "PENDING"]
-    failed = [e for e in enrollments if e.payment_status.value == "FAILED"]
-    
-    message = "📋 دوراتي:\n\n"
-    
-    if verified:
-        message += "✅ الدورات المفعلة:\n"
-        for e in verified:
-            message += f"• {e.course.course_name}\n"
-            if e.course.telegram_group_link:
-                message += f"  🔗 رابط مجموعة التيليجرام: {e.course.telegram_group_link}\n"
-            if e.with_certificate and e.course.whatsapp_group_link:
-                message += f"  🔗 رابط مجموعة الواتساب: {e.course.whatsapp_group_link}\n"
-        message += "\n"
-    
-    if pending:
-        message += "⏳ قيد المراجعة:\n"
-        for e in pending:
-            message += f"• {e.course.course_name}\n"
-        message += "\n"
-    
-    if failed:
-        message += "❌ تحتاج إعادة محاولة:\n"
-        for e in failed:
-            message += f"• {e.course.course_name}\n"
-        message += "\n"
-    
+
+    message = "📋 **دوراتي المسجلة:**\n\n"
+    message += "اضغط على أي دورة لعرض التفاصيل أو إكمال الدفع.\n\n"
+
+    # Sort enrollments to show verified first, then pending, then failed
+    enrollments.sort(key=lambda e: (e.payment_status.value != 'VERIFIED', e.payment_status.value != 'PENDING'))
+
+    for e in enrollments:
+        if e.payment_status.value == "VERIFIED":
+            status_icon = "✅"
+        elif e.payment_status.value == "PENDING":
+            status_icon = "⏳"
+        elif e.payment_status.value == "FAILED":
+            status_icon = "❌"
+        else:
+            status_icon = "❓"
+        
+        message += f"{status_icon} {e.course.course_name}\n"
+
     if pending_count > 0:
-        message += f"\n📝 الدورات المعلقة: {pending_count}\n"
+        message += "━━━━━━━━━━━━━━━━━━━━\n"
+        message += f"📝 **لديك {pending_count} تسجيلات معلقة.**\n"
+        message += "يمكنك تحديدها من الأزرار أدناه لإكمال الدفع.\n"
         if selected_count > 0:
-            message += f"✓ المحدد للدفع: {selected_count}\n"
-            message += f"💰 المبلغ الإجمالي: {total_selected:.0f} جنيه\n"
+            message += f"\n✓ المحدد للدفع: {selected_count}\n"
+            message += f"💰 المبلغ الإجمالي: **{total_selected:.0f} جنيه**\n"
     
     return message
 
@@ -594,16 +581,14 @@ def course_summary_message(course, enrollment_count: int = 0) -> str:
 💰 السعر: {course.price:.0f} جنيه سوداني{capacity_text}{reg_status}
 
 اضغط على الأزرار أدناه لعرض التفاصيل:
-Click buttons below to view details:
 """
 
 
 def course_description_details(course, session) -> str:
     """Show course description without instructor profile"""
-    description = course.description or "لا يوجد وصف متاح\nNo description available"
+    description = course.description or "لا يوجد وصف متاح"
     
     return f"""📋 **المحتويات**
-**Course Contents**
 ━━━━━━━━━━━━━━━━━━━━
 
 📚 {course.course_name}
@@ -618,7 +603,7 @@ def course_description_details(course, session) -> str:
 def instructor_reviews_message(course, reviews, avg_rating) -> str:
     """Show instructor reviews"""
     if not course.instructor:
-        return "❌ لا يوجد معلومات عن المدرب\nNo instructor info available"
+        return "❌ لا يوجد معلومات عن المدرب"
     
     rating_display = ""
     if avg_rating:
@@ -628,7 +613,6 @@ def instructor_reviews_message(course, reviews, avg_rating) -> str:
         rating_display = "لا توجد تقييمات بعد"
     
     header = f"""⭐ **تقييمات المدرب**
-**Instructor Reviews**
 ━━━━━━━━━━━━━━━━━━━━
 
 👨‍🏫 {course.instructor}
@@ -638,12 +622,12 @@ def instructor_reviews_message(course, reviews, avg_rating) -> str:
 """
     
     if not reviews:
-        return header + "\nلا توجد تقييمات بعد. كن أول من يقيّم!\nNo reviews yet. Be the first to review!"
+        return header + "\nلا توجد تقييمات بعد. كن أول من يقيّم!"
     
     reviews_text = ""
     for review in reviews[:10]:  # Show last 10 reviews
         stars = "⭐" * review.rating
-        user_name = f"User {review.user_id}"  # You can improve this with actual user names
+        user_name = f"مستخدم {review.user_id}"
         review_text = review.review_text or ""
         date = review.created_at.strftime('%Y-%m-%d')
         
@@ -660,10 +644,10 @@ def course_dates_details(course) -> str:
     from datetime import datetime
     
     # Format dates
-    start_date = course.start_date.strftime('%Y-%m-%d') if course.start_date else "غير محدد / Not set"
-    end_date = course.end_date.strftime('%Y-%m-%d') if course.end_date else "غير محدد / Not set"
-    reg_open = course.registration_open_date.strftime('%Y-%m-%d') if course.registration_open_date else "غير محدد / Not set"
-    reg_close = course.registration_close_date.strftime('%Y-%m-%d') if course.registration_close_date else "غير محدد / Not set"
+    start_date = course.start_date.strftime('%Y-%m-%d') if course.start_date else "غير محدد"
+    end_date = course.end_date.strftime('%Y-%m-%d') if course.end_date else "غير محدد"
+    reg_open = course.registration_open_date.strftime('%Y-%m-%d') if course.registration_open_date else "غير محدد"
+    reg_close = course.registration_close_date.strftime('%Y-%m-%d') if course.registration_close_date else "غير محدد"
     
     # Check registration status
     now = datetime.utcnow()
@@ -671,16 +655,15 @@ def course_dates_details(course) -> str:
     
     if course.registration_open_date and course.registration_close_date:
         if now < course.registration_open_date:
-            reg_status = "🔴 التسجيل لم يفتح بعد / Registration not open yet"
+            reg_status = "🔴 التسجيل لم يفتح بعد"
         elif now > course.registration_close_date:
-            reg_status = "🔴 التسجيل مغلق / Registration closed"
+            reg_status = "🔴 التسجيل مغلق"
         else:
-            reg_status = "🟢 التسجيل مفتوح / Registration open"
+            reg_status = "🟢 التسجيل مفتوح"
     else:
-        reg_status = "🟡 لا توجد مواعيد محددة / No dates set"
+        reg_status = "🟡 لا توجد مواعيد محددة"
     
     return f"""📅 **تواريخ الدورة**
-**Course Dates**
 ━━━━━━━━━━━━━━━━━━━━
 
 📚 {course.course_name}
@@ -701,14 +684,8 @@ def course_instructor_details(course, session) -> str:
     """Show instructor info with ratings"""
     if not course.instructor:
         return """👨🏫 **معلومات المدرب**
-**Instructor Info**
-
-
 ━━━━━━━━━━━━━━━━━━━━
-
-
 ❌ لا يوجد مدرب مخصص لهذه الدورة
-No instructor assigned to this course
 """
     
     from database import crud
@@ -728,26 +705,17 @@ No instructor assigned to this course
     # Clean any potential problematic markdown
     bio_text = bio_text.replace("**", "").replace("__", "").replace("*", "")
     
-    return f"""👨🏫 معلومات المدرب
-Instructor Info
-
-
+    return f"""👨🏫 **معلومات المدرب**
 ━━━━━━━━━━━━━━━━━━━━
 
+**الاسم:** {instructor.name}
 
-الاسم: {instructor.name}
+**التخصص:** {instructor.specialization or 'غير محدد'}
 
+**التقييم:** {rating_display}
 
-📚 التخصص: {instructor.specialization or 'غير محدد'}
-
-
-⭐ التقييم: {rating_display}
-
-
-نبذة:
+**نبذة:**
 {bio_text}
-
-
 """
 
 

@@ -7,6 +7,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram import Update
 from telegram.ext import ContextTypes
 from telegram.error import BadRequest
+from datetime import datetime, timedelta
 import config
 from utils.keyboards import (
     main_menu_reply_keyboard,
@@ -97,11 +98,34 @@ async def handle_my_courses_from_message(update: Update, context: ContextTypes.D
         internal_user_id = db_user.user_id
         
         # Query with internal_user_id
-        all_enrollments = session.query(crud.Enrollment).options(
+        all_enrollments_query = session.query(crud.Enrollment).options(
             joinedload(crud.Enrollment.course)
         ).filter(
             crud.Enrollment.user_id == internal_user_id
-        ).all()
+        )
+        
+        # Apply the new filtering logic
+        now = datetime.now()
+        seven_days_ago = now - timedelta(days=7)
+        
+        filtered_enrollments = []
+        for enrollment in all_enrollments_query.all():
+            course = enrollment.course
+            if not course or not course.end_date:
+                filtered_enrollments.append(enrollment)
+                continue
+
+            # Rule 1: Hide if it has a certificate and the end date has passed
+            if enrollment.with_certificate and course.end_date < now:
+                continue
+            
+            # Rule 2: Hide if it has NO certificate and the end date was more than 7 days ago
+            if not enrollment.with_certificate and course.end_date < seven_days_ago:
+                continue
+            
+            filtered_enrollments.append(enrollment)
+
+        all_enrollments = filtered_enrollments
         
         pending_enrollments = [e for e in all_enrollments if e.payment_status.value in ['PENDING', 'FAILED']]
         selected_ids = context.user_data['selected_pending_enrollments']
@@ -123,7 +147,7 @@ async def handle_my_courses_from_message(update: Update, context: ContextTypes.D
             total_selected=total_selected_amount
         )
         
-        markup = my_courses_selection_keyboard(pending_enrollments, selected_ids)
+        markup = my_courses_selection_keyboard(all_enrollments, selected_ids)
         await update.message.reply_text(new_text, reply_markup=markup, parse_mode='Markdown')
 
 
@@ -158,11 +182,34 @@ async def my_courses_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         internal_user_id = db_user.user_id
         
         # Query with internal_user_id
-        all_enrollments = session.query(crud.Enrollment).options(
+        all_enrollments_query = session.query(crud.Enrollment).options(
             joinedload(crud.Enrollment.course)
         ).filter(
             crud.Enrollment.user_id == internal_user_id
-        ).all()
+        )
+        
+        # Apply the new filtering logic
+        now = datetime.now()
+        seven_days_ago = now - timedelta(days=7)
+        
+        filtered_enrollments = []
+        for enrollment in all_enrollments_query.all():
+            course = enrollment.course
+            if not course or not course.end_date:
+                filtered_enrollments.append(enrollment)
+                continue
+
+            # Rule 1: Hide if it has a certificate and the end date has passed
+            if enrollment.with_certificate and course.end_date < now:
+                continue
+            
+            # Rule 2: Hide if it has NO certificate and the end date was more than 7 days ago
+            if not enrollment.with_certificate and course.end_date < seven_days_ago:
+                continue
+            
+            filtered_enrollments.append(enrollment)
+
+        all_enrollments = filtered_enrollments
         
         pending_enrollments = [e for e in all_enrollments if e.payment_status.value in ['PENDING', 'FAILED']]
         selected_ids = context.user_data['selected_pending_enrollments']
@@ -184,7 +231,7 @@ async def my_courses_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             total_selected=total_selected_amount
         )
         
-        markup = my_courses_selection_keyboard(pending_enrollments, selected_ids)
+        markup = my_courses_selection_keyboard(all_enrollments, selected_ids)
         
         try:
             await query.edit_message_text(new_text, reply_markup=markup, parse_mode='Markdown')
@@ -298,11 +345,18 @@ async def proceed_to_pay_selected_pending_callback(update: Update, context: Cont
         context.user_data.pop("resubmission_enrollment_id", None)
         context.user_data['selected_pending_enrollments'] = []
         
-        await query.edit_message_text(
-            payment_instructions_message(total_amount),
-            reply_markup=payment_upload_keyboard(),
-            parse_mode='Markdown'
-        )
+        try:
+            await query.edit_message_text(
+                payment_instructions_message(total_amount),
+                reply_markup=payment_upload_keyboard(),
+                parse_mode='Markdown'
+            )
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                logger.warning("Message not modified, skipping edit in proceed_to_pay_selected_pending_callback.")
+                pass
+            else:
+                raise
 
 
 
@@ -359,11 +413,18 @@ async def about_bot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     log_user_action(user.id, "about_bot_callback", "")
     
-    await query.edit_message_text(
-        about_bot_message(),
-        reply_markup=back_to_main_keyboard(),
-        parse_mode='Markdown'
-    )
+    try:
+        await query.edit_message_text(
+            about_bot_message(),
+            reply_markup=back_to_main_keyboard(),
+            parse_mode='Markdown'
+        )
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            logger.warning("Message not modified, skipping edit in about_bot_callback.")
+            pass
+        else:
+            raise
 
 
 async def back_to_main_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -374,10 +435,17 @@ async def back_to_main_callback(update: Update, context: ContextTypes.DEFAULT_TY
     
     log_user_action(user.id, "back_to_main", "")
     
-    await query.edit_message_text(
-        welcome_message(),
-        reply_markup=courses_menu_keyboard()
-    )
+    try:
+        await query.edit_message_text(
+            welcome_message(),
+            reply_markup=courses_menu_keyboard()
+        )
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            logger.warning("Message not modified, skipping edit in back_to_main_callback.")
+            pass
+        else:
+            raise
 
 async def courses_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show courses menu (from inline callback)"""
@@ -387,14 +455,21 @@ async def courses_menu_callback(update: Update, context: ContextTypes.DEFAULT_TY
     
     log_user_action(user.id, "courses_menu_callback", "")
     
-    await query.edit_message_text(
-        courses_menu_message(),
-        reply_markup=courses_menu_keyboard(),
-        parse_mode='Markdown'
-    )
+    try:
+        await query.edit_message_text(
+            courses_menu_message(),
+            reply_markup=courses_menu_keyboard(),
+            parse_mode='Markdown'
+        )
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            logger.warning("Message not modified, skipping edit in courses_menu_callback.")
+            pass
+        else:
+            raise
 
 async def my_course_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show enrolled course details"""
+    """Show enrolled course details and certificate upgrade option."""
     query = update.callback_query
     await query.answer()
     
@@ -404,14 +479,16 @@ async def my_course_detail_callback(update: Update, context: ContextTypes.DEFAUL
         enrollment = crud.get_enrollment_by_id(session, enrollment_id)
         
         if not enrollment:
-            await query.edit_message_text("❌ Course not found")
+            try:
+                await query.edit_message_text("❌ Course not found")
+            except BadRequest: pass
             return
         
         course = enrollment.course
         
         message = f"📚 **{course.course_name}**\n\n"
-        
-        # ✅ SHOW PARTIAL PAYMENT INFO
+        keyboard = []
+
         if enrollment.payment_status == PaymentStatus.PENDING and enrollment.amount_paid > 0:
             remaining = enrollment.payment_amount - enrollment.amount_paid
             message += (
@@ -420,76 +497,55 @@ async def my_course_detail_callback(update: Update, context: ContextTypes.DEFAUL
                 f"📊 المطلوب / Required: {enrollment.payment_amount:.0f} SDG\n"
                 f"⚠️ المتبقي / Remaining: **{remaining:.0f} SDG**\n\n"
             )
-            
             keyboard = [
                 [InlineKeyboardButton("💳 إكمال الدفع / Complete Payment", callback_data=f"complete_payment_{enrollment_id}")],
                 [InlineKeyboardButton("« العودة / Back", callback_data="my_courses_menu")]
             ]
         elif enrollment.payment_status == PaymentStatus.VERIFIED:
-            message += f"✅ **مفعّل / Activated**\n\n"
+            message += f"✅ **مفعّل**\n\n"
+            
+            # Add links directly to the message
             if course.telegram_group_link:
-                keyboard = [
-                    [InlineKeyboardButton("📱 انضم للمجموعة / Join Group", url=course.telegram_group_link)],
-                    [InlineKeyboardButton("« العودة / Back", callback_data="my_courses_menu")]
-                ]
-            else:
-                keyboard = [[InlineKeyboardButton("« العودة / Back", callback_data="my_courses_menu")]]
-        else:
-            message += f"⏳ **قيد المراجعة / Under Review**\n\n"
-            keyboard = [[InlineKeyboardButton("« العودة / Back", callback_data="my_courses_menu")]]
-        
-        message += f"📅 التسجيل / Enrolled: {enrollment.enrollment_date.strftime('%Y-%m-%d')}"
-        
-        await query.edit_message_text(
-            message,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
-
-async def my_links_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show user's registered course links"""
-    query = update.callback_query
-    await query.answer()
-    telegram_user_id = query.from_user.id
-
-    with get_db() as session:
-        db_user = crud.get_or_create_user(
-            session,
-            telegram_user_id=telegram_user_id,
-            username=query.from_user.username,
-            first_name=query.from_user.first_name,
-            last_name=query.from_user.last_name
-        )
-        internal_user_id = db_user.user_id
-
-        verified_enrollments = session.query(crud.Enrollment).options(
-            joinedload(crud.Enrollment.course)
-        ).filter(
-            crud.Enrollment.user_id == internal_user_id,
-            crud.Enrollment.payment_status == PaymentStatus.VERIFIED
-        ).all()
-
-        if not verified_enrollments:
-            await query.edit_message_text("❌ لا توجد لديك دورات مفعلة لعرض الروابط.", reply_markup=back_to_main_keyboard())
-            return
-
-        message = "🔗 **روابط دوراتك / Your Course Links**\n\n"
-        for enrollment in verified_enrollments:
-            course = enrollment.course
-            message += f"📚 **{course.course_name}**\n"
-            if course.telegram_group_link:
-                message += f"  📱 تليجرام: {course.telegram_group_link}\n"
+                message += f"📱 **رابط مجموعة التليجرام:**\n{course.telegram_group_link}\n\n"
             if enrollment.with_certificate and course.whatsapp_group_link:
-                message += f"  💬 واتساب (مع شهادة): {course.whatsapp_group_link}\n"
-            message += "\n"
+                message += f"💬 **رابط مجموعة الواتساب (للشهادة):**\n{course.whatsapp_group_link}\n\n"
 
-        await query.edit_message_text(
-            message,
-            parse_mode='Markdown',
-            reply_markup=back_to_main_keyboard()
-        )
+            # Check if user can register for a certificate
+            can_register_for_cert = False
+            if (not enrollment.with_certificate and 
+                course.certificate_available and 
+                course.certificate_price > 0 and
+                course.end_date):
+                
+                deadline = course.end_date + timedelta(days=7)
+                now = datetime.now()
+                
+                if (course.start_date or datetime.min) <= now <= deadline:
+                    can_register_for_cert = True
 
+            if can_register_for_cert:
+                keyboard.append([InlineKeyboardButton(f"📜 تسجيل للشهادة ({course.certificate_price:.0f} SDG)", callback_data=f"cert_upgrade_{enrollment_id}")])
+            
+            keyboard.append([InlineKeyboardButton("« العودة", callback_data="my_courses_menu")])
 
+        else: # FAILED or PENDING with 0 paid
+            message += f"⏳ **قيد المراجعة**\n\n"
+            keyboard = [[InlineKeyboardButton("« العودة", callback_data="my_courses_menu")]]
+        
+        message += f"📅 تاريخ التسجيل: {enrollment.enrollment_date.strftime('%Y-%m-%d')}"
+        
+        try:
+            await query.edit_message_text(
+                message,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                logger.warning("Message not modified, skipping edit in my_course_detail_callback.")
+                pass
+            else:
+                raise
 
 async def complete_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle complete payment button"""
@@ -512,16 +568,21 @@ async def complete_payment_callback(update: Update, context: ContextTypes.DEFAUL
         context.user_data["reupload_amount"] = remaining
         context.user_data["awaiting_receipt_upload"] = True
         
-        await query.edit_message_text(
-            f"💳 **إكمال الدفع / Complete Payment**\n\n"
-            f"⚠️ **المبلغ المتبقي:** {remaining:.0f} SDG\n"
-            f"⚠️ **Remaining Amount:** {remaining:.0f} SDG\n\n"
-            f"📤 أرسل إيصال الدفع الآن\n"
-            f"📤 Send payment receipt now\n\n"
-            f"🏦 رقم الحساب: `{config.EXPECTED_ACCOUNT_NUMBER}`",
-            reply_markup=payment_upload_keyboard(),
-            parse_mode='Markdown'
-        )
+        try:
+            await query.edit_message_text(
+                f"💳 **إكمال الدفع**\n\n"
+                f"⚠️ **المبلغ المتبقي:** {remaining:.0f} SDG\n\n"
+                f"📤 أرسل إيصال الدفع الآن\n\n"
+                f"🏦 رقم الحساب: `{config.EXPECTED_ACCOUNT_NUMBER}`",
+                reply_markup=payment_upload_keyboard(),
+                parse_mode='Markdown'
+            )
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                logger.warning("Message not modified, skipping edit in complete_payment_callback.")
+                pass
+            else:
+                raise
 
 async def contact_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle contact admin button from main menu"""
@@ -529,59 +590,47 @@ async def contact_admin_callback(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     
     message = """
-📞 **التواصل مع الإدارة / Contact Admin**
+📞 **التواصل مع الإدارة**
 
-يمكنك إرسال رسالتك الآن وسيتم إيصالها للإدارة.
-
-Please send your message now and it will be forwarded to administration.
-
-💡 يمكنك إرسال:
-- نص
-- صور
-- مستندات
-
-💡 You can send:
-- Text
-- Images
-- Documents
+الرجاء إرسال رسالتك الآن.
+يمكنك إرسال نص، صور، أو مستندات.
 """
     
-    await query.edit_message_text(
-        message,
-        parse_mode='Markdown',
-        reply_markup=back_to_main_keyboard()
-    )
+    try:
+        await query.edit_message_text(
+            message,
+            parse_mode='Markdown',
+            reply_markup=back_to_main_keyboard()
+        )
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            logger.warning("Message not modified, skipping edit in contact_admin_callback.")
+            pass
+        else:
+            raise
     
     # Set state
     context.user_data['awaiting_support_message'] = True
 
 async def contact_admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle "📞 التواصل مع الإدارة" button press"""
-    user = update.effective_user
+    """Handles 'Contact Admin' text button from main menu."""
     
     message = """
-📞 **التواصل مع الإدارة / Contact Admin**
+📞 **التواصل مع الإدارة**
 
-يمكنك إرسال رسالتك الآن وسيتم إيصالها للإدارة.
-
-Please send your message now and it will be forwarded to administration.
-
-💡 يمكنك إرسال:
-- نص / Text
-- صور / Images  
-- مستندات / Documents
-
-⬇️ أرسل رسالتك الآن
-⬇️ Send your message now
+الرجاء إرسال رسالتك الآن.
+يمكنك إرسال نص، صور، أو مستندات.
 """
     
     await update.message.reply_text(
         message,
-        parse_mode='Markdown'
+        parse_mode='Markdown',
+        reply_markup=back_to_main_keyboard()
     )
     
+    # Set flag in user data
     context.user_data['awaiting_support_message'] = True
-    logger.info(f"User {user.id} clicked contact admin button")
+    logger.info(f"User {update.effective_user.id} initiated contact with admin via text button")
 
 async def follow_us_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle 'تابعونا' button from main menu"""
@@ -595,3 +644,71 @@ async def follow_us_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         parse_mode='Markdown',
         reply_markup=main_menu_reply_keyboard()
     )
+
+async def certificate_upgrade_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Starts the process for a verified user to pay for a certificate."""
+    query = update.callback_query
+    await query.answer()
+
+    enrollment_id = int(query.data.split('_')[-1])
+
+    with get_db() as session:
+        enrollment = crud.get_enrollment_by_id(session, enrollment_id)
+
+        if not enrollment or not enrollment.course:
+            try:
+                await query.edit_message_text("❌ An error occurred. Enrollment not found.")
+            except BadRequest: pass
+            return
+
+        course = enrollment.course
+        certificate_price = course.certificate_price
+
+        # Set user_data for the payment flow
+        context.user_data['awaiting_receipt_upload'] = True
+        context.user_data['certificate_upgrade_enrollment_id'] = enrollment_id
+        context.user_data['expected_amount_for_gemini'] = certificate_price
+        # Clear other payment-related keys to avoid conflicts
+        context.user_data.pop('resubmission_enrollment_id', None)
+        context.user_data.pop('current_payment_enrollment_ids', None)
+
+
+        # Define account numbers with their bank names
+        bank_accounts = [
+            (config.BANKAK_ACCOUNT, "بنكك"),
+            (config.CASHI_ACCOUNT, "كاشي"),
+            (config.FAWRY_ACCOUNT, "فوري")
+        ]
+        
+        # Filter out None values
+        valid_accounts = [(acc, name) for acc, name in bank_accounts if acc]
+        
+        # Build accounts display text
+        if len(valid_accounts) == 1:
+            accounts_text = f"🏦 {valid_accounts[0][1]}: `{valid_accounts[0][0]}`"
+        else:
+            accounts_text = "🏦 أرقام الحسابات المقبولة:\n" + "\n".join(
+                [f"• {name}: `{acc}`" for acc, name in valid_accounts]
+            )
+
+        message = (
+            f"📜 **تسجيل للحصول على شهادة**\n\n"
+            f"📚 الدورة: {course.course_name}\n"
+            f"💰 سعر الشهادة: **{certificate_price:.0f} SDG**\n\n"
+            f"لإتمام التسجيل، يرجى إرسال إيصال دفع بالمبلغ المطلوب.\n\n"
+            f"{accounts_text}\n\n"
+            f"👤 الاسم: {config.EXPECTED_ACCOUNT_NAME}"
+        )
+
+        try:
+            await query.edit_message_text(
+                text=message,
+                reply_markup=payment_upload_keyboard(),
+                parse_mode='Markdown'
+            )
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                logger.warning("Message not modified in certificate_upgrade_callback.")
+                pass
+            else:
+                raise

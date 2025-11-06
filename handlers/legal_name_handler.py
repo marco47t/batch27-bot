@@ -73,6 +73,10 @@ async def start_legal_name_collection(update: Update, context: ContextTypes.DEFA
 
 async def receive_first_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Receive first name"""
+    # Exit early if user_data is not available (e.g., in a channel)
+    if not context.user_data:
+        return ConversationHandler.END
+        
     first_name = update.message.text.strip()
     
     # Validate English only
@@ -101,6 +105,10 @@ async def receive_first_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def receive_father_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Receive father's name"""
+    # Exit early if user_data is not available (e.g., in a channel)
+    if not context.user_data:
+        return ConversationHandler.END
+        
     father_name = update.message.text.strip()
     
     # Validate English only
@@ -129,6 +137,10 @@ async def receive_father_name(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def receive_grandfather_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Receive grandfather's name"""
+    # Exit early if user_data is not available (e.g., in a channel)
+    if not context.user_data:
+        return ConversationHandler.END
+        
     grandfather_name = update.message.text.strip()
     
     # Validate English only
@@ -157,6 +169,10 @@ async def receive_grandfather_name(update: Update, context: ContextTypes.DEFAULT
 
 async def receive_great_grandfather_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Receive great-grandfather's name and save all"""
+    # Exit early if user_data is not available (e.g., in a channel)
+    if not context.user_data:
+        return ConversationHandler.END
+        
     great_grandfather_name = update.message.text.strip()
     user = update.effective_user
     db = next(get_db())
@@ -229,6 +245,10 @@ async def receive_great_grandfather_name(update: Update, context: ContextTypes.D
 
 async def cancel_legal_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancel legal name collection"""
+    # Exit early if user_data is not available (e.g., in a channel)
+    if not context.user_data:
+        return ConversationHandler.END
+        
     context.user_data.clear()
     
     await update.message.reply_text(
