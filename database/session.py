@@ -25,13 +25,13 @@ SessionLocal = sessionmaker(
 @contextmanager
 def get_db() -> Session:
     """
-    Context manager for database sessions
-    Ensures proper session lifecycle management
+    Context manager for database sessions.
+    Provides a session and handles rollback on error and closing.
+    The caller is responsible for committing the session.
     """
     session = SessionLocal()
     try:
         yield session
-        session.commit()
     except Exception as e:
         session.rollback()
         raise e

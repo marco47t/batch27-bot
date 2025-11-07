@@ -369,25 +369,7 @@ async def register_course_callback(update: Update, context: ContextTypes.DEFAULT
         if crud.is_user_enrolled(session, internal_user_id, course_id):
             await query.answer("⚠️ أنت مسجل بالفعل في هذه الدورة!", show_alert=True)
             return
-        if not crud.has_legal_name(session, internal_user_id):
-            logger.info(f"User {telegram_user_id} needs to provide legal name first")
-            
-            await query.edit_message_text(
-                "📝 **تسجيل الاسم القانوني مطلوب**\n\n"
-                "قبل إتمام التسجيل، نحتاج إلى اسمك الرباعي الكامل باللغة الإنجليزية كما هو مكتوب في المستندات الرسمية.\n\n"
-                "⚠️ **مهم جداً:**\n"
-                "• يجب أن يكون الاسم باللغة الإنجليزية.\n"
-                "• الاسم الرباعي: (اسمك - اسم والدك - اسم جدك - اسم جد والدك).\n\n"
-                "🔹 **الرجاء إرسال اسمك الكامل الآن.**",
-                parse_mode='Markdown'
-            )
 
-            # Set context for legal name collection
-            context.user_data['collecting_legal_name_for_registration'] = True
-            context.user_data['registration_internal_user_id'] = internal_user_id
-            context.user_data['course_detail_course_id'] = course_id  # ← Mark as course details flow
-            
-            return  # Wait for legal name input
         if course.certificate_available and course.certificate_price > 0:
             message = f"""
             📚 <b>{course.course_name}</b>
@@ -736,109 +718,81 @@ async def view_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def confirm_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Confirm cart and check legal name before proceeding to payment"""
+    """
+    Confirm cart and check legal name before proceeding to payment.
+    This function can be called from a CallbackQuery (button press) or a Message (e.g., /start deeplink).
+    """
     query = update.callback_query
-    await query.answer()
+    user = update.effective_user
     
-    telegram_user_id = query.from_user.id
+    # Determine how to respond (edit message vs. send new one)
+    if query:
+        await query.answer()
+        responder = query.edit_message_text
+    else:
+        responder = update.message.reply_text
+
+    telegram_user_id = user.id
     logger.info(f"User {telegram_user_id} confirming cart")
     
     with get_db() as session:
-        # Get user with internal ID
         db_user = crud.get_or_create_user(
             session,
             telegram_user_id=telegram_user_id,
-            username=query.from_user.username,
-            first_name=query.from_user.first_name,
-            last_name=query.from_user.last_name
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name
         )
         session.flush()
         internal_user_id = db_user.user_id
-        
-        # Check if user has legal name registered
-        if not crud.has_legal_name(session, internal_user_id):
-            logger.info(f"User {telegram_user_id} needs to provide legal name first")
-            
-            await query.edit_message_text(
-                "📝 **تسجيل الاسم القانوني مطلوب**\n\n"
-                "قبل إتمام التسجيل، نحتاج إلى اسمك الرباعي الكامل باللغة الإنجليزية كما هو مكتوب في المستندات الرسمية.\n\n"
-                "⚠️ **مهم جداً:**\n"
-                "• يجب أن يكون الاسم باللغة الإنجليزية.\n"
-                "• الاسم الرباعي: (اسمك - اسم والدك - اسم جدك - اسم جد والدك).\n\n"
-                "🔹 **الرجاء إرسال اسمك الكامل الآن.**",
-                parse_mode='Markdown'
-            )
-            
-            # Set context for legal name collection during registration
-            context.user_data['collecting_legal_name_for_registration'] = True
-            context.user_data['registration_internal_user_id'] = internal_user_id
-            
-            return  # Stop here, wait for legal name input
         
         # User has legal name, proceed with normal cart confirmation
         cart_items = crud.get_user_cart(session, internal_user_id)
         
         if not cart_items:
             logger.warning(f"User {telegram_user_id} tried to confirm empty cart")
-        try:
-            await query.edit_message_text(
+            await responder(
                 error_message("cart_empty"),
                 reply_markup=back_to_main_keyboard()
             )
-        except BadRequest as e:
-            if "Message is not modified" in str(e):
-                logger.warning("Message not modified, skipping edit in confirm_cart_callback.")
-                pass
-            else:
-                raise
             return
         
-        # ✅ Calculate total with certificates
         cart_totals = crud.calculate_cart_total(session, internal_user_id)
         total = cart_totals['total']
 
-        # --- NEW: HANDLE FREE REGISTRATION ---
         if total == 0:
             logger.info(f"User {telegram_user_id} is registering for a free course.")
             enrollment_ids = []
             for item in cart_items:
                 enrollment = crud.create_enrollment(session, internal_user_id, item.course_id, 0)
                 enrollment.with_certificate = item.with_certificate
-                enrollment.payment_status = PaymentStatus.VERIFIED # Directly verify
+                enrollment.payment_status = PaymentStatus.VERIFIED
                 enrollment.verification_date = datetime.now()
                 enrollment_ids.append(enrollment.enrollment_id)
             
-            session.commit()
             crud.clear_user_cart(session, internal_user_id)
             session.commit()
 
-            await query.edit_message_text(
+            await responder(
                 "✅ **تم التسجيل بنجاح!**\n\nلقد تم تسجيلك في الدورة (الدورات) المجانية.\nيمكنك الآن العثور عليها في قسم 'دوراتي'.",
                 reply_markup=back_to_main_keyboard(),
                 parse_mode='Markdown'
             )
             
-            # Also send group invite links for free courses
             from handlers.group_registration import send_course_invite_link
             for eid in enrollment_ids:
                 enrollment = crud.get_enrollment_by_id(session, eid)
                 if enrollment:
                     await send_course_invite_link(update, context, telegram_user_id, enrollment.course_id)
-
-            return # End of free registration flow
-        # --- END OF NEW LOGIC ---
+            return
         
-        # Create pending enrollments using internal ID
         enrollment_ids = []
         for item in cart_items:
             course = item.course
-            
-            # Calculate payment amount including certificate
             payment_amount = course.price
             if item.with_certificate and course.certificate_available:
                 payment_amount += course.certificate_price
             
-            # CHECK IF PENDING ENROLLMENT ALREADY EXISTS
             existing_enrollment = session.query(crud.Enrollment).filter(
                 crud.Enrollment.user_id == internal_user_id,
                 crud.Enrollment.course_id == course.course_id,
@@ -846,32 +800,23 @@ async def confirm_cart_callback(update: Update, context: ContextTypes.DEFAULT_TY
             ).first()
             
             if existing_enrollment:
-                # Update existing enrollment with correct amount and certificate flag
                 existing_enrollment.payment_amount = payment_amount
                 existing_enrollment.with_certificate = item.with_certificate
                 enrollment_ids.append(existing_enrollment.enrollment_id)
-                logger.info(f"Reusing existing pending enrollment {existing_enrollment.enrollment_id}, amount: {payment_amount}")
             else:
-                # Create new enrollment with certificate info
                 enrollment = crud.create_enrollment(session, internal_user_id, course.course_id, payment_amount)
                 enrollment.with_certificate = item.with_certificate
                 enrollment_ids.append(enrollment.enrollment_id)
-                logger.info(f"Created NEW enrollment {enrollment.enrollment_id}, amount: {payment_amount}, with_cert: {item.with_certificate}")
 
-        session.commit()
-
-        # ✅ CLEAR CART AFTER CONFIRMATION
         crud.clear_user_cart(session, internal_user_id)
         session.commit()
         
-        # Store in context for payment flow
         context.user_data['cart_total_for_payment'] = total
         context.user_data['pending_enrollment_ids_for_payment'] = enrollment_ids
         
         logger.info(f"User {telegram_user_id} cart confirmed: {len(enrollment_ids)} enrollments, total={total}")
         log_user_action(telegram_user_id, "cart_confirmed", f"total={total}, enrollments={enrollment_ids}")
         
-        # Import here to avoid circular import
         from handlers.payment_handlers import proceed_to_payment_callback
         await proceed_to_payment_callback(update, context)
 

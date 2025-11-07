@@ -232,19 +232,73 @@ class InstructorReview(Base):
     user = relationship("User", back_populates="instructor_reviews")
 
 class Instructor(Base):
+
     """Instructor model - stores instructor profiles"""
+
     __tablename__ = "instructors"
+
     
+
     instructor_id = Column(Integer, primary_key=True, autoincrement=True)
+
     name = Column(String(255), nullable=False)
+
     bio = Column(Text, nullable=True)
+
     specialization = Column(String(255), nullable=True)
+
     email = Column(String(255), nullable=True)
+
     phone = Column(String(50), nullable=True)
+
     photo_url = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+
+    created_at = Column(DateTime, default=func.now())
+
     is_active = Column(Boolean, default=True)
+
     
+
     # Relationships
+
     courses = relationship("Course", back_populates="instructor")
+
     reviews = relationship("InstructorReview", back_populates="instructor", cascade="all, delete-orphan")
+
+
+
+
+
+class PaymentLink(Base):
+
+    """PaymentLink model - stores unique tokens for direct course registration links"""
+
+    __tablename__ = "payment_links"
+
+
+
+    link_id = Column(Integer, primary_key=True, autoincrement=True)
+
+    token = Column(String(64), unique=True, nullable=False, index=True)
+
+    course_id = Column(Integer, ForeignKey('courses.course_id', ondelete='CASCADE'), nullable=False)
+
+    with_certificate = Column(Boolean, default=False, nullable=False)
+
+    
+
+    usage_count = Column(Integer, default=0, nullable=False)
+
+    
+
+    created_at = Column(DateTime, default=func.now())
+
+
+
+    # Relationships
+
+    course = relationship("Course")
+
+
+
+

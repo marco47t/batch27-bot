@@ -1110,3 +1110,24 @@ def get_user_reviewable_instructors(session, user_id: int):
     ).distinct().all()
     
     return instructors
+
+
+# ==================== PAYMENT LINK CRUD ====================
+
+def create_payment_link(session: Session, token: str, course_id: int, with_certificate: bool) -> 'PaymentLink':
+    """Creates a new payment link."""
+    from database.models import PaymentLink
+    link = PaymentLink(
+        token=token,
+        course_id=course_id,
+        with_certificate=with_certificate,
+        usage_count=0  # Ensure it starts as unused
+    )
+    session.add(link)
+    session.flush()  # Flush to get the link object ready without committing
+    return link
+
+def get_payment_link_by_token(session: Session, token: str) -> Optional['PaymentLink']:
+    """Retrieves a payment link by its token."""
+    from database.models import PaymentLink
+    return session.query(PaymentLink).filter(PaymentLink.token == token).first()

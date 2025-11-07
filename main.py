@@ -35,8 +35,12 @@ from handlers import (
     admin_reviews,
     admin_pending_registrations,
     admin_instructor_management,
-    instructor_reviews
+    instructor_reviews,
+    admin_payment_links
 )
+from datetime import datetime
+import pytz
+from database.models import PaymentStatus
 from handlers.course_handlers import course_dates_callback, course_description_callback, handle_legal_name_during_registration
 from handlers.support_handlers import (
     contact_admin_command, 
@@ -59,6 +63,73 @@ setup_cloudwatch_logging(aws_region='eu-north-1')  # Change to your AWS region
 # Get logger for this module
 logger = logging.getLogger(__name__)
 logging.getLogger('httpx').setLevel(logging.WARNING)
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /start command, including smart deep links with expiration."""
+    if context.args and context.args[0].startswith("reg_"):
+        # New format: reg_{slug}_{token} -> extract token from the end
+        parts = context.args[0].split('_')
+        token = parts[-1]
+        user = update.effective_user
+        
+        with get_db() as session:
+            link = crud.get_payment_link_by_token(session, token)
+            db_user = crud.get_or_create_user(
+                session,
+                telegram_user_id=user.id,
+                username=user.username,
+                first_name=user.first_name,
+                last_name=user.last_name,
+                chat_id=update.effective_chat.id
+            )
+            
+            if link:
+                # Check for link expiration based on course end date
+                sudan_tz = pytz.timezone('Africa/Khartoum')
+                now = datetime.now(sudan_tz)
+                
+                course_end_date = link.course.end_date
+                if course_end_date and now.date() > course_end_date.date():
+                    await update.message.reply_text("عذراً، التسجيل في هذه الدورة قد انتهى لأن الدورة نفسها قد انتهت.")
+                    return
+
+                # 1. Check if user is already fully enrolled
+                if crud.is_user_enrolled(session, db_user.user_id, link.course_id):
+                    await update.message.reply_text("أنت مسجل بالفعل في هذه الدورة. يمكنك العثور عليها ضمن 'دوراتي'.")
+                    await menu_handlers.start_command(update, context)
+                    return
+
+                # 2. Check for an existing partial payment
+                pending_enrollment = crud.get_enrollment_by_user_and_course(session, db_user.user_id, link.course_id)
+                if pending_enrollment and pending_enrollment.payment_status == PaymentStatus.PENDING:
+                    remaining_balance = pending_enrollment.payment_amount - (pending_enrollment.amount_paid or 0)
+                    if remaining_balance > 0:
+                        context.user_data['cart_total_for_payment'] = remaining_balance
+                        context.user_data['pending_enrollment_ids_for_payment'] = [pending_enrollment.enrollment_id]
+                        
+                        await update.message.reply_text(
+                            f"مرحباً بعودتك! لديك دفعة معلقة لهذه الدورة.\n"
+                            f"الرصيد المتبقي: {remaining_balance:,.0f} SDG\n\n"
+                            "يرجى المتابعة لإكمال دفعتك."
+                        )
+                        from handlers.payment_handlers import proceed_to_payment_callback
+                        await proceed_to_payment_callback(update, context)
+                        return
+
+                # 3. If no enrollment, start fresh
+                crud.clear_user_cart(session, db_user.user_id)
+                crud.add_to_cart_with_certificate(session, db_user.user_id, link.course_id, link.with_certificate)
+                
+                link.usage_count += 1
+                session.commit()
+
+                await course_handlers.confirm_cart_callback(update, context)
+                return
+            else:
+                await update.message.reply_text("رابط التسجيل هذا غير صالح.")
+    
+    await menu_handlers.start_command(update, context)
+
 def run_database_migration():
     """Run database migration to fix BigInteger issue"""
     from sqlalchemy import create_engine, text, inspect
@@ -229,7 +300,7 @@ def main():
     # ==========================
     # COMMAND HANDLERS
     # ==========================
-    application.add_handler(CommandHandler("start", menu_handlers.start_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("start", start_command, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("admin", admin_handlers.admin_command, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("pending_registrations", admin_pending_registrations.admin_pending_registrations_command, filters=filters.ChatType.PRIVATE))  # NEW
 
@@ -299,6 +370,32 @@ def main():
         name="edit_course"
     )
     application.add_handler(editcourse_conv)
+
+    # Payment Link Conversation
+    createlink_conv = ConversationHandler(
+        entry_points=[CommandHandler("createlink", admin_payment_links.create_payment_link_command, filters=filters.ChatType.PRIVATE)],
+        states={
+            admin_payment_links.SELECT_COURSE: [
+                CallbackQueryHandler(admin_payment_links.select_course_for_link_callback, pattern=r'^plink_course_')
+            ],
+            admin_payment_links.SELECT_CERTIFICATE: [
+                CallbackQueryHandler(admin_payment_links.generate_payment_link_callback, pattern=r'^plink_cert_')
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", admin_payment_links.cancel_link_creation, filters=filters.ChatType.PRIVATE)],
+        per_message=False,
+        name="create_link"
+    )
+    application.add_handler(createlink_conv)
+    
+    # ==========================
+    # MESSAGE HANDLERS (ReplyKeyboard Buttons) - FIXED
+    # ==========================
+    application.add_handler(MessageHandler(
+        filters.Text(["1- الدورات المتاحة 📚"]) & filters.ChatType.PRIVATE, 
+        menu_handlers.handle_courses_menu_message
+
+    ))
     
     # ==========================
     # MESSAGE HANDLERS (ReplyKeyboard Buttons) - FIXED
@@ -550,11 +647,6 @@ def main():
         (filters.PHOTO | filters.Document.IMAGE) & filters.ChatType.PRIVATE, 
         payment_handlers.receipt_upload_message_handler
     ))
-
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, 
-        handle_legal_name_during_registration
-    ), group=0)  # Higher priority
 
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.User(config.ADMIN_USER_IDS) & filters.ChatType.PRIVATE, 

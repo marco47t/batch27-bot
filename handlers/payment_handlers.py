@@ -40,10 +40,21 @@ logger = logging.getLogger(__name__)
 
 
 async def proceed_to_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle proceed to payment button click"""
+    """
+    Handle proceed to payment button click or direct call from a command.
+    Sends payment instructions to the user.
+    """
     query = update.callback_query
-    await query.answer()
-    telegram_user_id = query.from_user.id
+    user = update.effective_user
+
+    # Determine how to respond (edit message vs. send new one)
+    if query:
+        await query.answer()
+        responder = query.edit_message_text
+    else:
+        responder = update.message.reply_text
+
+    telegram_user_id = user.id
     
     logger.info(f"User {telegram_user_id} proceeding to payment")
     
@@ -52,7 +63,7 @@ async def proceed_to_payment_callback(update: Update, context: ContextTypes.DEFA
     
     if not cart_total or not pending_enrollment_ids:
         logger.error(f"User {telegram_user_id} payment data missing: cart_total={cart_total}, enrollments={pending_enrollment_ids}")
-        await query.edit_message_text(error_message("payment_data_missing"), reply_markup=back_to_main_keyboard())
+        await responder(error_message("payment_data_missing"), reply_markup=back_to_main_keyboard())
         return
     
     context.user_data["current_payment_total"] = cart_total
@@ -61,7 +72,7 @@ async def proceed_to_payment_callback(update: Update, context: ContextTypes.DEFA
     
     logger.info(f"User {telegram_user_id} payment initiated: amount=${cart_total}, enrollments={pending_enrollment_ids}")
     
-    await query.edit_message_text(
+    await responder(
         payment_instructions_message(cart_total),
         reply_markup=payment_upload_keyboard(),
         parse_mode='Markdown'
