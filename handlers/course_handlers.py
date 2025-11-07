@@ -380,19 +380,19 @@ async def register_course_callback(update: Update, context: ContextTypes.DEFAULT
             هل تريد التسجيل مع شهادة؟
             Do you want to register with a certificate?
             """
-        try:
-            await query.edit_message_text(
-                message,
-                reply_markup=certificate_option_keyboard(course_id, register_flow=True),
-                parse_mode='HTML'
-            )
-        except BadRequest as e:
-            if "Message is not modified" in str(e):
-                logger.warning("Message not modified, skipping edit in register_course_callback.")
-                pass
-            else:
-                raise
-            return
+            try:
+                await query.edit_message_text(
+                    message,
+                    reply_markup=certificate_option_keyboard(course_id, register_flow=True),
+                    parse_mode='HTML'
+                )
+            except BadRequest as e:
+                if "Message is not modified" in str(e):
+                    logger.warning("Message not modified, skipping edit in register_course_callback.")
+                    pass
+                else:
+                    raise
+                return
         else:
             # No certificate, proceed directly to payment
             payment_amount = course.price
@@ -1101,14 +1101,17 @@ async def register_certificate_choice_callback(update: Update, context: ContextT
         
         course = session.query(Course).filter(Course.course_id == course_id).first()
         
-        try:
-            await query.edit_message_text("❌ الدورة غير موجودة")
-        except BadRequest as e:
-            if "Message is not modified" in str(e):
-                logger.warning("Message not modified, skipping edit in register_certificate_choice_callback.")
-                pass
-            else:
-                raise
+        if not course:
+            try:
+                await query.edit_message_text("❌ الدورة غير موجودة")
+            except BadRequest as e:
+                if "Message is not modified" in str(e):
+                    logger.warning("Message not modified, skipping edit in register_certificate_choice_callback.")
+                    pass
+                else:
+                    raise
+            return
+
         payment_amount = course.price
         if with_certificate:
             payment_amount += course.certificate_price

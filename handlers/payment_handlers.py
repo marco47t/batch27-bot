@@ -374,7 +374,6 @@ async def _process_receipt_async(update: Update, context: ContextTypes.DEFAULT_T
                     logger.info(f"Processing initial payment for user {telegram_user_id}")
                     enrollments_to_update = crud.get_user_pending_enrollments(session, internal_user_id)
             
-            
                 if not enrollments_to_update:
                     logger.error(f"No enrollments found for user {telegram_user_id}")
                     await update.message.reply_text(error_message("enrollment_not_found"), reply_markup=back_to_main_keyboard())
