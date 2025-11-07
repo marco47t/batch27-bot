@@ -392,7 +392,7 @@ async def register_course_callback(update: Update, context: ContextTypes.DEFAULT
                     pass
                 else:
                     raise
-                return
+            return
         else:
             # No certificate, proceed directly to payment
             payment_amount = course.price
