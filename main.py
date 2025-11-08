@@ -68,7 +68,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /start command, including smart deep links with expiration."""
     if context.args and context.args[0].startswith("reg_"):
         # New format: reg_{slug}_{token} -> extract token from the end
-        parts = context.args[0].split('_')
+        parts = context.args[0].rsplit('_', 1)
         token = parts[-1]
         user = update.effective_user
         

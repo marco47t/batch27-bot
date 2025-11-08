@@ -36,6 +36,7 @@ venv.bak/
 *.db
 *.sqlite
 *.sqlite3
+*.db'
 
 # Receipts (sensitive data)
 receipts/*.jpg

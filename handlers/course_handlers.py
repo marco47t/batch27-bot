@@ -691,13 +691,6 @@ async def view_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         total = cart_totals['total']
         
-        # Add remaining balances from pending enrollments
-        for enrollment in pending_enrollments:
-            paid = enrollment.amount_paid or 0
-            remaining = enrollment.payment_amount - paid
-            if remaining > 0:
-                total += remaining
-        
         # ✅ PASS PENDING ENROLLMENTS TO MESSAGE FUNCTION
         try:
             await query.edit_message_text(
