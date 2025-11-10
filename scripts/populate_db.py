@@ -8,7 +8,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database import crud, get_db, init_db
-from database.models import PaymentStatus
+from database.models import PaymentStatus, TransactionStatus
 
 def populate_database():
     """Populates the database with sample data for testing."""
@@ -67,7 +67,23 @@ def populate_database():
         # Create Enrollments
         enrollment1 = crud.create_enrollment(session, user_id=user1.user_id, course_id=course1.course_id, payment_amount=60.0)
         enrollment1.with_certificate = True
+        enrollment1.amount_paid = 60.0  # Set amount_paid for verified enrollment
         crud.update_enrollment_status(session, enrollment_id=enrollment1.enrollment_id, status="VERIFIED")
+
+        # Add a transaction for enrollment1
+        transaction1 = crud.create_transaction(
+            session,
+            enrollment_id=enrollment1.enrollment_id,
+            receipt_image_path="path/to/receipt1.jpg"
+        )
+        crud.update_transaction(
+            session,
+            transaction_id=transaction1.transaction_id,
+            status=TransactionStatus.APPROVED, # Use the enum directly
+            receipt_amount=60.0,
+            receipt_transaction_id="TXN12345",
+            receipt_transfer_datetime=datetime.now(timezone.utc)
+        )
 
         enrollment2 = crud.create_enrollment(session, user_id=user2.user_id, course_id=course2.course_id, payment_amount=120.0)
         

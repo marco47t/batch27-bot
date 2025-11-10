@@ -36,7 +36,8 @@ from handlers import (
     admin_pending_registrations,
     admin_instructor_management,
     instructor_reviews,
-    admin_payment_links
+    admin_payment_links,
+    admin_anonymous_registration,
 )
 from datetime import datetime
 import pytz
@@ -387,6 +388,26 @@ def main():
         name="create_link"
     )
     application.add_handler(createlink_conv)
+
+    # Anonymous Registration Conversation
+    anon_reg_conv = ConversationHandler(
+        entry_points=[CommandHandler("anonregister", admin_anonymous_registration.start_anonymous_registration, filters=filters.ChatType.PRIVATE)],
+        states={
+            admin_anonymous_registration.SELECT_COURSE: [
+                CallbackQueryHandler(admin_anonymous_registration.select_course_callback, pattern=r'^anon_reg_course_')
+            ],
+            admin_anonymous_registration.SELECT_CERTIFICATE: [
+                CallbackQueryHandler(admin_anonymous_registration.select_certificate_callback, pattern=r'^anon_reg_cert_')
+            ],
+            admin_anonymous_registration.UPLOAD_RECEIPT: [
+                MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, admin_anonymous_registration.receipt_upload_handler)
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", admin_anonymous_registration.cancel, filters=filters.ChatType.PRIVATE)],
+        per_message=False,
+        name="anonymous_registration"
+    )
+    application.add_handler(anon_reg_conv)
     
     # ==========================
     # MESSAGE HANDLERS (ReplyKeyboard Buttons) - FIXED
