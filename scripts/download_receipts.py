@@ -1,20 +1,17 @@
+
 import os
+import sys
 import boto3
-from dotenv import load_dotenv
 from sqlalchemy import create_engine, Column, Integer, BigInteger, String, Text, DateTime, ForeignKey, Float, Boolean, Enum
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.sql import func
 import enum
 
-# Load environment variables from .env file (temporary one in scripts directory)
-load_dotenv(dotenv_path=".env")
+# Add project root to Python path to allow importing config
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, project_root)
 
-# Get AWS credentials from environment variables
-aws_access_key_id = os.getenv("AWS_ACCESS_KEY_ID")
-aws_secret_access_key = os.getenv("AWS_SECRET_ACCESS_KEY")
-aws_s3_bucket_name = os.getenv("AWS_S3_BUCKET_NAME")
-aws_s3_region = os.getenv("AWS_S3_REGION")
-database_url = os.getenv("DATABASE_URL")
+import config
 
 # --- SQLAlchemy Models (simplified for this script) ---
 Base = declarative_base()
@@ -42,7 +39,7 @@ class Enrollment(Base):
     course = relationship("Course")
 
 # --- Database Setup ---
-engine = create_engine(database_url)
+engine = create_engine(config.DATABASE_URL)
 Session = sessionmaker(bind=engine)
 
 # Create a directory to store the receipts
@@ -53,9 +50,9 @@ if not os.path.exists(output_base_dir):
 # Create an S3 client
 s3 = boto3.client(
     "s3",
-    aws_access_key_id=aws_access_key_id,
-    aws_secret_access_key=aws_secret_access_key,
-    region_name=aws_s3_region,
+    aws_access_key_id=config.AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=config.AWS_SECRET_ACCESS_KEY,
+    region_name=config.AWS_S3_REGION,
 )
 
 def download_receipts_from_s3_and_db():
@@ -81,9 +78,16 @@ def download_receipts_from_s3_and_db():
             if not receipt_s3_key:
                 print(f"Skipping enrollment {enrollment.enrollment_id}: no receipt_image_path found.")
                 continue
+            
+            # The receipt_image_path is a full URL, extract the key
+            if '.amazonaws.com/' in receipt_s3_key:
+                s3_key = receipt_s3_key.split('.amazonaws.com/')[1]
+            else:
+                s3_key = receipt_s3_key
+
 
             # Extract file extension from S3 key
-            _, file_extension = os.path.splitext(receipt_s3_key)
+            _, file_extension = os.path.splitext(s3_key)
             if not file_extension:
                 file_extension = ".jpg" # Default to .jpg if no extension in S3 key
 
@@ -97,8 +101,12 @@ def download_receipts_from_s3_and_db():
             safe_course_name = "".join(c for c in course_file_name if c.isalnum() or c in (' ', '.', '_')).rstrip()
             download_path = os.path.join(user_directory, f"{safe_course_name}{file_extension}")
 
-            print(f"Downloading {receipt_s3_key} for user {user_folder_name} (Course: {course_file_name}) to {download_path}")
-            s3.download_file(aws_s3_bucket_name, receipt_s3_key, download_path)
+            print(f"Downloading {s3_key} for user {user_folder_name} (Course: {course_file_name}) to {download_path}")
+            try:
+                s3.download_file(config.AWS_S3_BUCKET_NAME, s3_key, download_path)
+            except Exception as e:
+                print(f"  -> ERROR downloading {s3_key}: {e}")
+
 
         print("All receipts downloaded successfully.")
 
